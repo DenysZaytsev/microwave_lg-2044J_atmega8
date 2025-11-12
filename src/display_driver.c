@@ -300,6 +300,14 @@ void update_display() {
             else 
                 set_display(CHAR_E, CHAR_N, CHAR_D, CHAR_DASH); // "End-"
             break;
+
+        // --- 🔴 ПОЧАТОК БЛОКУ ВИПРАВЛЕННЯ (v2.3.3 - Баг 2-го етапу) ---
+        // Під час переходу показуємо прочерки, як у стані за замовчуванням
+        case STATE_STAGE2_TRANSITION:
+            set_colon_mode(COLON_OFF); 
+            set_display(CHAR_DASH, CHAR_DASH, CHAR_DASH, CHAR_DASH); 
+            break;
+        // --- 🔴 КІНЕЦЬ БЛОКУ ВИПРАВЛЕННЯ ---
             
         default: 
             set_colon_mode(COLON_OFF); 

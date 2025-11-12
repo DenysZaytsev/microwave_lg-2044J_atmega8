@@ -63,6 +63,9 @@ void keypad_timer_tick(void) {
                 } 
             } 
             
+            // --- 🔴 ПОЧАТОК БЛОКУ ВИПРАВЛЕННЯ (v2.4.3 - Виправлення Debounce) ---
+            // Це оригінальна, правильна логіка з v2.2.0.
+            // Вона коректно обробляє і натискання, і відпускання.
             if(ck == g_key_last_state) { 
                 if(g_debounce_counter < DEBOUNCE_TIME) 
                     g_debounce_counter++; 
@@ -72,11 +75,6 @@ void keypad_timer_tick(void) {
                 g_debounce_counter = 0; 
                 g_key_last_state = ck; 
             } 
-            
-            // Синхронізуємо g_debounced_key_state, якщо кнопка відпущена
-            if (ck == 0) {
-                 g_debounced_key_state = 0;
-            }
         }
     #endif
 }
@@ -86,7 +84,9 @@ void handle_key_hold_increment(char key, uint16_t hold_duration, uint16_t* last_
     switch (g_state) {
         case STATE_SET_TIME: 
         case STATE_SET_CLOCK_TIME: 
-        case STATE_COOKING:
+        // --- 🔴 ПОЧАТОК БЛОКУ ВИПРАВЛЕННЯ (v2.3.9 - Оптимізація пам'яті) ---
+        // Видалено 'case STATE_COOKING:'
+        // --- 🔴 КІНЕЦЬ БЛОКУ ВИПРАВЛЕННЯ ---
             if (hold_duration > 3000) interval = 50; 
             else if (hold_duration > 1500) interval = 100; 
             else interval = 200; 
