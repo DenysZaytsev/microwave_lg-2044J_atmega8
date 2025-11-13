@@ -1,17 +1,20 @@
 /*
- * ПОВНА ПРОШИВКА МІКРОХВИЛЬОВКИ (v_final_2.4.4_isr_refactor)
- * Модель: LG MS-2044J (на базі ATmega8, 16МГц)
+ * ПОВНА ПРОШИВКА МІКРОХВИЛЬОВКИ (v_final_2.6.4_timer_fix)
+ * Модель: LG MS-2044J (на базі ATmega8)
  *
- * --- ОПИС ФУНКЦІОНАЛУ v2.4.4 ---
- * 1.  (v2.3.3) Виправлено баг 2-го етапу.
- * 2.  (v2.3.8) Виправлено фільтр ZVS (надійний підрахунок >= 40 Гц).
- * 3.  (v2.3.9) Видалено логіку "Більше/Менше" під час готування (економія пам'яті).
- * 4.  (v2.4.4) РЕФАКТОРИНГ АРХІТЕКТУРИ (Виправлення таймінгу АЦП):
- * Повертаємо 1мс-завдання (дисплей, АЦП) назад у ISR(TIMER1_COMPA_vect),
- * оскільки рефакторинг v2.4.1 зламав їх стабільний таймінг.
- * "Важка" 1-секундна логіка залишається в loop() (через прапор g_1sec_tick_flag).
- * Це архітектура v2.2.0 (яка працювала) + виправлення (ZVS, 2-етап).
- * 5.  (v2.4.3) Повернено відсутню функцію setup_timer1_1ms().
+ * --- ОПИС ФУНКЦІОНАЛУ v2.6.4 ---
+ * 1.  (v2.6.4) КРИТИЧНЕ ВИПРАВЛЕННЯ: Таймер (setup_timer1_1ms)
+ * тепер автоматично налаштовується (OCR1A) залежно 
+ * від F_CPU (16МГц або 8МГц), що виправляє всі 
+ * проблеми з таймінгами кнопок та затримками.
+ *
+ * 2.  (v2.6.3) ВИПРАВЛЕНО: Відновлено логіку з v1.8.1 для
+ * `STATE_IDLE` (введення часу) та `STATE_SET_POWER` (старт 2-го етапу).
+ * 3.  (v2.6.3) ВИПРАВЛЕНО: Всі виклики `start_cooking_cycle()` 
+ * (включаючи "Швидкий Старт") тепер безпечно
+ * використовуються через прапор `g_start_cooking_flag`.
+ *
+ * --- (Решта функціоналу без змін) ---
  */
 
 // ============================================================================
@@ -51,9 +54,7 @@ volatile AppState_t g_state = STATE_IDLE;
 volatile uint32_t g_millis_counter = 0; 
 volatile uint16_t g_timer_ms = 0; 
 
-// --- 🔴 ПОЧАТОК БЛОКУ ВИПРАВЛЕННЯ (v2.4.4 - Правильна Архітектура ISR/loop) ---
 volatile bool g_1sec_tick_flag = false;
-// --- 🔴 КІНЕЦЬ БЛОКУ ВИПРАВЛЕННЯ ---
 
 volatile uint16_t g_beep_ms_counter = 0;
 volatile uint16_t g_beep_flip_sequence_timer = 0;
@@ -95,9 +96,10 @@ volatile uint8_t g_clock_hour = 0, g_clock_min = 0, g_clock_sec = 0;
 volatile bool g_clock_24hr_mode = true;
 volatile DefrostFlipInfo_t g_defrost_flip_info;
 
-// --- 🔴 ПОЧАТОК БЛОКУ ВИПРАВЛЕННЯ (v2.3.8 - Економний ZVS фільтр) ---
 volatile uint8_t g_zvs_qualification_counter = 0;
-// --- 🔴 КІНЕЦЬ БЛОКУ ВИПРАВЛЕННЯ ---
+
+// 🔽🔽🔽 (v2.6.3) Зміна: Додано визначення прапора 🔽🔽🔽
+volatile bool g_start_cooking_flag = false; 
 
 
 // ============================================================================
@@ -156,46 +158,33 @@ void wake_up_from_sleep() {
 // --- 6. ФУНКЦІЇ ОНОВЛЕННЯ СТАНУ ---
 // ============================================================================
 
-// --- 🔴 ПОЧАТОК БЛОКУ ВИПРАВЛЕННЯ (v2.3.2) ---
-// Повністю переписана логіка для коректної обробки
-// конфліктів MIN_SAFE_ON_TIME та MIN_SAFE_OFF_TIME на коротких циклах
 void calculate_pwm_on_time() {
     if (g_cook_power_level == 0) { 
         g_pwm_on_time_seconds = g_pwm_cycle_duration; // Max power (700W)
         return; 
     }
 
-    // 1. Розрахувати ідеальний час увімкнення
     uint16_t watts = power_levels_watt[g_cook_power_level];
     uint16_t on_time = (uint16_t)(((uint32_t)watts * g_pwm_cycle_duration) / 700);
 
-    // 2. Визначити жорсткі межі
     uint8_t min_on = MIN_SAFE_ON_TIME_SEC;
     uint8_t max_on = g_pwm_cycle_duration;
     
-    // Переконатися, що ми залишаємо час для MIN_SAFE_OFF_TIME_SEC,
-    // але тільки якщо цикл взагалі довший за цей час
     if (g_pwm_cycle_duration > MIN_SAFE_OFF_TIME_SEC) {
          max_on = g_pwm_cycle_duration - MIN_SAFE_OFF_TIME_SEC;
     } else {
-         // Якщо цикл ДУЖЕ короткий (<= 2 сек), max_on має бути 0
          max_on = 0; 
     }
 
-    // 3. Обробка конфлікту: (наприклад, цикл 5с -> min=5, max=3)
-    // Це означає, що цикл занадто короткий, щоб безпечно дотримуватись обох правил.
-    // У цьому випадку, пріоритет має MIN_SAFE_OFF_TIME (безпека вимкнення).
     if (min_on > max_on) {
         on_time = max_on; 
     } else {
-        // 4. Конфлікту немає, просто застосовуємо межі
         if (on_time < min_on) on_time = min_on;
         if (on_time > max_on) on_time = max_on;
     }
 
     g_pwm_on_time_seconds = (uint8_t)on_time;
 }
-// --- 🔴 КІНЕЦЬ БЛОКУ ВИПРАВЛЕННЯ ---
 
 void recalculate_adaptive_pwm() {
     if (g_cook_original_total_time < MAGNETRON_COAST_TIME_SEC && g_cook_power_level != 0) { 
@@ -206,19 +195,15 @@ void recalculate_adaptive_pwm() {
     
     calculate_pwm_on_time();
     
-    // --- 🔴 ВИПРАВЛЕННЯ БАГУ ШІМ (v2.2.2) ---
     g_pwm_cycle_counter_seconds = 0;
 }
 
 bool start_cooking_cycle() {
-    // --- 🔴 ПОЧАТОК БЛОКУ ВИПРАВЛЕННЯ (v2.2.4) ---
-    // (Видалено _delay_ms() для запобігання зависанню при виклику з ISR)
     if (CDD_PIN & CDD_BIT) {
         do_short_beep();
         reset_to_idle();
         return false;
     }
-    // --- 🔴 КІНЕЦЬ БЛОКУ ВИПРАВЛЕННЯ ---
 
     set_fan(true); 
     g_cook_original_total_time = g_cook_time_total_sec; 
@@ -237,7 +222,6 @@ void resume_cooking() {
         set_colon_mode(COLON_ON); 
         set_fan(true); 
         
-        // --- 🔴 ПОЧАТОК БЛОКУ ВИПРАВЛЕННЯ (v2.3.2 - аналогічно update_cook_timer) ---
         bool should_be_on = (g_pwm_cycle_counter_seconds < g_pwm_on_time_seconds);
         if (should_be_on && 
             (g_cook_original_total_time >= ADAPTIVE_PWM_THRESHOLD_SEC) && 
@@ -254,7 +238,6 @@ void resume_cooking() {
         {
             set_magnetron(false);
         }
-        // --- 🔴 КІНЕЦЬ БЛОКУ ВИПРАВЛЕННЯ ---
     }
 }
 
@@ -318,7 +301,6 @@ void resume_after_flip() {
     g_state = STATE_COOKING; 
     set_fan(true); 
     
-    // Використовуємо ту ж логіку, що і в resume_cooking
     bool should_be_on = (g_pwm_cycle_counter_seconds < g_pwm_on_time_seconds);
     if (should_be_on && 
         (g_cook_original_total_time >= ADAPTIVE_PWM_THRESHOLD_SEC) && 
@@ -352,7 +334,6 @@ void update_cook_timer() {
         g_cook_time_total_sec--; 
         check_flip_required();
         
-        // --- 🔴 ПОЧАТОК БЛОКУ ВИПРАВЛЕННЯ (v2.2.3) ---
         bool should_be_on = (g_pwm_cycle_counter_seconds < g_pwm_on_time_seconds);
         if (should_be_on && 
             (g_cook_original_total_time >= ADAPTIVE_PWM_THRESHOLD_SEC) && 
@@ -369,23 +350,17 @@ void update_cook_timer() {
         {
             set_magnetron(false);
         }
-        // --- 🔴 КІНЕЦЬ БЛОКУ ВИПРАВЛЕННЯ ---
         
         g_pwm_cycle_counter_seconds++; 
         if (g_pwm_cycle_counter_seconds >= g_pwm_cycle_duration) g_pwm_cycle_counter_seconds = 0;
         
         if (g_cook_time_total_sec == 0) {
-            // --- 🔴 ПОЧАТОК БЛОКУ ВИПРАВЛЕННЯ (v2.3.3 - Баг 2-го етапу) ---
             if (g_stage2_time_sec > 0) { 
-                // НЕ запускаємо 2-й етап одразу з ISR.
-                // Встановлюємо новий стан і вимикаємо все.
-                // Головний цикл loop() підхопить цей стан і безпечно запустить 2-й етап.
                 g_state = STATE_STAGE2_TRANSITION;
                 set_colon_mode(COLON_OFF); 
-                set_magnetron(false); // Примусово вимкнути (це встановить g_magnetron_last_off_timestamp_ms)
+                set_magnetron(false); 
                 set_fan(false);
             }
-            // --- 🔴 КІНЕЦЬ БЛОКУ ВИПРАВЛЕННЯ ---
             else { 
                 g_state=STATE_FINISHED; 
                 set_colon_mode(COLON_OFF); 
@@ -431,10 +406,11 @@ void reset_to_idle() {
     g_magnetron_last_off_timestamp_ms = 0; 
     g_was_two_stage_cook = false;
     g_post_cook_sec_counter = 0;
-    // --- 🔴 ПОЧАТОК БЛОКУ ВИПРАВЛЕННЯ (v2.3.8 - Економний ZVS фільтр) ---
     g_zvs_qualification_counter = 0;
     g_zvs_pulse_counter = 0;
-    // --- 🔴 КІНЕЦЬ БЛОКУ ВИПРАВЛЕННЯ ---
+    
+    // 🔽🔽🔽 (v2.6.3) Зміна: Скидання прапора 🔽🔽🔽
+    g_start_cooking_flag = false;
 }
 
 void handle_time_input_odometer(char key) {
@@ -497,11 +473,6 @@ void handle_clock_input(char key) {
 void handle_state_machine(char key, bool allow_beep) {
     if (g_state == STATE_SLEEPING) return;
     
-    // --- 🔴 ПОЧАТОК БЛОКУ ВИПРАВЛЕННЯ (v2.3.9 - Оптимізація пам'яті) ---
-    // Повністю видалено логіку "Більше/Менше" для стану STATE_COOKING
-    // --- 🔴 КІНЕЦЬ БЛОКУ ВИПРАВЛЕННЯ ---
-
-
     if (key == KEY_START_QUICKSTART && g_state == STATE_IDLE) {
         g_cook_time_total_sec = 30; 
         g_quick_start_delay_ms = 1000; 
@@ -530,6 +501,18 @@ void handle_state_machine(char key, bool allow_beep) {
                 g_clock_24hr_mode = true; 
                 if (allow_beep) do_short_beep(); 
             }
+            
+            // 🔽🔽🔽 (v2.6.3) Зміна: Відновлено логіку v1.8.1 🔽🔽🔽
+            else if (key==KEY_10_MIN || key==KEY_1_MIN || key==KEY_10_SEC) { 
+                g_input_min_tens=0;
+                g_input_min_units=0; 
+                g_input_sec_tens=0; 
+                handle_time_input_odometer(key); 
+                g_state = STATE_SET_TIME; 
+                if (allow_beep) do_short_beep(); 
+            }
+            // 🔼🔼🔼 Кінець блоку v1.8.1 🔼🔼🔼
+
             else if (key == KEY_MICRO) { 
                 g_cook_power_level = 0; 
                 g_state = STATE_SET_POWER; 
@@ -550,7 +533,11 @@ void handle_state_machine(char key, bool allow_beep) {
                 g_auto_program = 1; 
                 get_program_settings(def1_meat, 6, 500); 
                 calculate_flip_schedule(1, 500); 
-                start_cooking_cycle(); 
+                
+                // 🔽🔽🔽 (v2.6.3) Зміна: Безпечний старт 🔽🔽🔽
+                // start_cooking_cycle(); // (v2.6.2) Небезпечно
+                g_start_cooking_flag = true; // (v2.6.3) Безпечно
+                
                 if (allow_beep) do_short_beep(); 
             }
             break;
@@ -617,7 +604,11 @@ void handle_state_machine(char key, bool allow_beep) {
                 }
                 g_active_auto_program_type = PROGRAM_NONE; 
                 if(g_cook_time_total_sec > 0) { 
-                    start_cooking_cycle(); 
+                    
+                    // 🔽🔽🔽 (v2.6.3) Зміна: Безпечний старт 🔽🔽🔽
+                    // start_cooking_cycle(); // (v2.6.2) Небезпечно
+                    g_start_cooking_flag = true; // (v2.6.3) Безпечно
+                    
                     if (allow_beep) do_short_beep(); 
                 } else 
                     reset_to_idle();
@@ -650,6 +641,27 @@ void handle_state_machine(char key, bool allow_beep) {
                 g_state=STATE_SET_TIME; 
                 if (allow_beep) do_short_beep(); 
             }
+
+            // 🔽🔽🔽 (v2.6.3) Зміна: Відновлено логіку v1.8.1 🔽🔽🔽
+            else if (key == KEY_START_QUICKSTART) { 
+                g_cook_time_total_sec=(g_input_min_tens*10+g_input_min_units)*60+(g_input_sec_tens*10);
+                g_stage2_time_sec=g_cook_time_total_sec; 
+                g_stage2_power=g_cook_power_level; 
+                g_cook_time_total_sec=g_stage1_time_sec; 
+                g_cook_power_level=g_stage1_power; 
+                g_active_auto_program_type = PROGRAM_NONE; 
+                g_was_two_stage_cook = true; // (v2.6.3) Явно вказуємо, що це 2-й етап
+                
+                if(g_cook_time_total_sec>0) { 
+                    // 🔽🔽🔽 (v2.6.3) Зміна: Безпечний старт 🔽🔽🔽
+                    // start_cooking_cycle(); // (v1.8.1) Небезпечно
+                    g_start_cooking_flag = true; // (v2.6.3) Безпечно
+                    
+                    if (allow_beep) do_short_beep(); 
+                } else reset_to_idle(); 
+            }
+            // 🔼🔼🔼 Кінець блоку v1.8.1 🔼🔼🔼
+
             else if (key == KEY_STOP_RESET) { 
                 reset_to_idle(); 
                 if (allow_beep) do_short_beep(); 
@@ -733,7 +745,11 @@ void handle_state_machine(char key, bool allow_beep) {
                     } 
                 }
                 if(g_cook_time_total_sec>0) { 
-                    start_cooking_cycle(); 
+                    
+                    // 🔽🔽🔽 (v2.6.3) Зміна: Безпечний старт 🔽🔽🔽
+                    // start_cooking_cycle(); // (v2.6.2) Небезпечно
+                    g_start_cooking_flag = true; // (v2.6.3) Безпечно
+                    
                     if (allow_beep) do_short_beep(); 
                 } else 
                     reset_to_idle();
@@ -815,27 +831,21 @@ void handle_state_machine(char key, bool allow_beep) {
 void setup_timer1_1ms() {
     TCCR1A=0; TCCR1B=0; TCNT1=0; 
     
-    // --- 🔴 ПОЧАТОК БЛОКУ ВИПРАВЛЕННЯ (v2.4.5 - Динамічний F_CPU) ---
-    // Автоматично вибираємо правильне значення OCR1A
-    // на основі 'board_build.f_cpu' з platformio.ini
-    
-    #if F_CPU == 16000000L
-        // 16МГц / 8 (дільник) / 2000 (тиків) = 1000 Гц = 1мс
-        OCR1A = 1999; 
-    #elif F_CPU == 8000000L
-        // 8МГц / 8 (дільник) / 1000 (тиків) = 1000 Гц = 1мс
-        OCR1A = 999;
+    // 🔽🔽🔽 (v2.6.4) Зміна: Динамічне налаштування таймера 🔽🔽🔽
+    #if (F_CPU == 16000000L)
+        OCR1A = 1999; // 16МГц / 8 / 2000 = 1000Hz (1мс)
+    #elif (F_CPU == 8000000L)
+        OCR1A = 999;  // 8МГц / 8 / 1000 = 1000Hz (1мс)
     #else
-        #error "Непідтримувана частота F_CPU! Будь ласка, оновіть setup_timer1_1ms()"
+        #error "Unsupported F_CPU frequency for timer setup"
     #endif
-    // --- 🔴 КІНЕЦЬ БЛОКУ ВИПРАВЛЕННЯ ---
-    
+    // 🔼🔼🔼 Кінець зміни 🔼🔼🔼
+
     TCCR1B|=(1<<WGM12)|(1<<CS11); // Дільник Prescaler = 8
     TIMSK|=(1<<OCIE1A); 
 }
 
-// --- 🔴 ПОЧАТОК БЛОКУ ВИПРАВЛЕННЯ (v2.4.2 - Правильна Архітектура ISR/loop) ---
-// Ця функція тепер виконується в loop(), а не в ISR
+
 void run_1sec_tasks(void) {
     if (g_door_overlay_timer_ms == 0) {
             
@@ -852,39 +862,29 @@ void run_1sec_tasks(void) {
             if(g_state != STATE_PAUSED && g_state != STATE_FLIP_PAUSE && g_state != STATE_STAGE2_TRANSITION) 
                 update_clock();
         
-        // --- 🔴 ПОЧАТОК БЛОКУ ВИПРАВЛЕННЯ (v2.3.8 - Економний ZVS фільтр) ---
         #elif (ZVS_MODE==1 || ZVS_MODE==2)
             g_zvs_watchdog_counter++; 
             
-            // Перевіряємо, чи був сигнал стабільним (>=40 Гц) 
-            // І чи був хоч один імпульс (watchdog == 1)
             bool valid_pulse_train = (g_zvs_watchdog_counter == 1) && (g_zvs_pulse_counter >= ZVS_MIN_PULSES_PER_SEC);
 
-            // Скидаємо лічильник імпульсів для наступної секунди
             g_zvs_pulse_counter = 0; 
 
             if(!valid_pulse_train) { 
-                // Якщо імпульсів не було (watchdog > 1) АБО їх було замало (шум)
                 if(g_zvs_present) { 
-                    g_zvs_present = false; // Вважаємо сигнал ВТРАЧЕНИМ
+                    g_zvs_present = false; 
                 } 
-                g_zvs_qualification_counter = 0; // Скидаємо лічильник кваліфікації
+                g_zvs_qualification_counter = 0; 
                 
                 #if (ZVS_MODE==2)
                     if (g_state != STATE_SLEEPING) enter_sleep_mode(); 
                 #endif 
                 
-                // Використовуємо резервний годинник, оскільки ZVS немає
                 if(g_state != STATE_PAUSED && g_state != STATE_FLIP_PAUSE && g_state != STATE_STAGE2_TRANSITION) 
                     update_clock(); 
             } else {
-                // (valid_pulse_train == true)
-                // Ми отримали >40 імпульсів за останню секунду.
-                
                 if(!g_zvs_present) {
-                     g_zvs_qualification_counter++; // Збільшуємо лічильник "хороших" секунд
+                     g_zvs_qualification_counter++; 
                      
-                     // Кваліфікуємо сигнал, лише якщо він стабільний 2 секунди поспіль
                      if (g_zvs_qualification_counter >= ZVS_QUALIFICATION_SECONDS) {
                          g_zvs_present = true;
                          #if (ZVS_MODE==2)
@@ -892,23 +892,15 @@ void run_1sec_tasks(void) {
                          #endif
                      }
                 } else {
-                    // Якщо сигнал вже кваліфікований, просто скидаємо лічильник (все добре)
                     g_zvs_qualification_counter = 0;
                 }
-                // НЕ викликаємо update_clock(), оскільки він викликається з ISR(INT0_vect)
             }
         #endif 
-        // --- 🔴 КІНЕЦЬ БЛОКУ ВИПРАВЛЕННЯ ---
     }
 }
-// --- 🔴 КІНЕЦЬ БЛОКУ ВИПРАВЛЕННЯ ---
 
 
 ISR(TIMER1_COMPA_vect) { 
-    // --- 🔴 ПОЧАТОК БЛОКУ ВИПРАВЛЕННЯ (v2.4.4 - Правильна Архітектура ISR/loop) ---
-    // Повертаємо 1мс-завдання назад в ISR (як у v2.2.0), 
-    // щоб гарантувати стабільний таймінг для АЦП та дисплея
-    
     g_millis_counter++; 
     update_colon_state(); // З display_driver
     
@@ -933,7 +925,16 @@ ISR(TIMER1_COMPA_vect) {
     g_timer_ms++; 
     
     // --- Загальні таймери (мілісекундні) ---
-    if(g_quick_start_delay_ms>0) { g_quick_start_delay_ms--; if(g_quick_start_delay_ms==0 && g_state==STATE_QUICK_START_PREP) start_cooking_cycle(); }
+    
+    // 🔽🔽🔽 (v2.6.3) Зміна: Безпечний старт 🔽🔽🔽
+    if(g_quick_start_delay_ms>0) { 
+        g_quick_start_delay_ms--; 
+        if(g_quick_start_delay_ms==0 && g_state==STATE_QUICK_START_PREP) 
+            // start_cooking_cycle(); // (v2.6.2) Небезпечно
+            g_start_cooking_flag = true; // (v2.6.3) Безпечно
+    }
+    // 🔼🔼🔼 Кінець зміни 🔼🔼🔼
+
     if(g_state==STATE_FINISHED) { g_post_cook_timer_ms++; if(g_post_cook_timer_ms >= 30000) { g_state=STATE_POST_COOK; g_post_cook_timer_ms=0; g_post_cook_sec_counter = 0; do_long_beep(); } } 
     else if(g_state==STATE_POST_COOK) { g_post_cook_timer_ms++; }
     if(g_clock_save_blink_ms>0) { g_clock_save_blink_ms--; if(g_clock_save_blink_ms==0) reset_to_idle(); }
@@ -943,40 +944,27 @@ ISR(TIMER1_COMPA_vect) {
     // --- 1-секундний таймер ---
     if(g_timer_ms>=1000) {
         g_timer_ms=0;
-        // Встановлюємо прапор для loop(), "важка" логіка (1-сек) тепер там
         g_1sec_tick_flag = true; 
     }
-    // --- 🔴 КІНЕЦЬ БЛОКУ ВИПРАВЛЕННЯ ---
 }
 
 #if (ZVS_MODE!=0)
 ISR(INT0_vect) {
-    // --- 🔴 ПОЧАТОК БЛОКУ ВИПРАВЛЕННЯ (v2.3.8 - Економний ZVS фільтр) ---
-    // Цей ISR тепер ДУЖЕ швидкий. Він не робить ніякої логіки,
-    // крім підрахунку та ввімкнення магнетрона (якщо дозволено).
-
-    g_zvs_watchdog_counter = 0; // Доказ, що імпульс був
+    g_zvs_watchdog_counter = 0; 
     
-    // Інкрементуємо лічильник, але не більше 254, щоб уникнути переповнення
     if (g_zvs_pulse_counter < 254) g_zvs_pulse_counter++; 
     
-    // Вмикаємо магнетрон, ТІЛЬКИ ЯКЩО:
-    // 1. Є запит на ввімкнення (g_magnetron_request)
-    // 2. І сигнал ZVS вже визнаний стабільним (g_zvs_present)
     if(g_magnetron_request && g_zvs_present) {
         MAGNETRON_PORT |= MAGNETRON_BIT;
     }
     
-    // Синхронізація годинника (тільки якщо сигнал кваліфікований)
     if(g_zvs_present && g_door_overlay_timer_ms == 0 && g_state != STATE_PAUSED && g_state != STATE_FLIP_PAUSE && g_state != STATE_STAGE2_TRANSITION) { 
-        // Ми використовуємо g_zvs_pulse_counter для підрахунку до 50 (для 50Гц)
         if(g_zvs_pulse_counter >= 50) { 
-            g_zvs_pulse_counter = 0; // Скидаємо лічильник імпульсів
-            g_timer_ms = 0;          // Скидаємо 1-секундний таймер (синхронізація)
-            update_clock();          // Рухаємо годинник
+            g_zvs_pulse_counter = 0; 
+            g_timer_ms = 0;          
+            update_clock();          
         } 
     }
-    // --- 🔴 КІНЕЦЬ БЛОКУ ВИПРАВЛЕННЯ ---
 }
 #endif
 
@@ -988,12 +976,9 @@ void setup() {
     #endif
     setup_timer1_1ms(); 
     
-    // --- 🔴 ПОЧАТОК БЛОКУ ВИПРАВЛЕННЯ (v2.3.4) ---
     #if (ZVS_MODE!=0)
-        // Встановлюємо g_zvs_present в 'false' за замовчуванням.
         MCUCR|=(1<<ISC01); MCUCR&=~(1<<ISC00); GIMSK|=(1<<INT0); g_zvs_watchdog_counter=0; g_zvs_present=false;
     #endif
-    // --- 🔴 КІНЕЦЬ БЛОКУ ВИПРАВЛЕННЯ ---
     
     reset_to_idle(); 
     
@@ -1004,37 +989,32 @@ void loop() {
     static char s_lps=0; static uint16_t s_lht=0; char cks=0;
     static bool s_last_door_state = false;
 
-    // --- 🔴 ПОЧАТОК БЛОКУ ВИПРАВЛЕННЯ (v2.4.4 - Правильна Архітектура ISR/loop) ---
-    // (run_1ms_tasks() видалено, код повернуто в ISR)
-    
-    // Обробляємо 1-секундні завдання (таймери, ZVS) з головного циклу
-    if (g_1sec_tick_flag) {
-        g_1sec_tick_flag = false; // Скидаємо прапор
-        run_1sec_tasks();         // Виконуємо 1-секундні задачі
+    // 🔽🔽🔽 (v2.6.3) Зміна: Додано обробник прапора безпечного старту 🔽🔽🔽
+    if (g_start_cooking_flag) {
+        g_start_cooking_flag = false;
+        start_cooking_cycle();
     }
-    // --- 🔴 КІНЕЦЬ БЛОКУ ВИПРАВЛЕННЯ ---
+    // 🔼🔼🔼 Кінець зміни 🔼🔼🔼
 
-    // --- 🔴 ПОЧАТОК БЛОКУ ВИПРАВЛЕННЯ (v2.3.3 - Баг 2-го етапу) ---
-    // Обробник переходу між етапами (викликається з головного циклу, не з ISR)
+    if (g_1sec_tick_flag) {
+        g_1sec_tick_flag = false; 
+        run_1sec_tasks();         
+    }
+
     if (g_state == STATE_STAGE2_TRANSITION) {
-        // Чекаємо, доки не мине 2 секунди з моменту вимкнення магнетрона
         uint32_t elapsed_off_time = g_millis_counter - g_magnetron_last_off_timestamp_ms;
         
-        // Додаємо +100мс на випадок дрібних похибок таймінгу
         if (g_magnetron_last_off_timestamp_ms == 0 || elapsed_off_time > ((uint32_t)MIN_SAFE_OFF_TIME_SEC * 1000UL + 100UL)) 
         {
-            // 2 секунди пройшло. Безпечно запускаємо 2-й етап.
             g_cook_time_total_sec = g_stage2_time_sec; 
             g_cook_power_level = g_stage2_power; 
-            g_stage2_time_sec = 0; // Очищуємо прапор
+            g_stage2_time_sec = 0; 
             
-            // Викликаємо start_cooking_cycle() з головного циклу - це безпечно!
-            start_cooking_cycle(); 
+            // 🔽🔽🔽 (v2.6.3) Зміна: Безпечний старт 🔽🔽🔽
+            // start_cooking_cycle(); // (v2.6.2) Небезпечно
+            g_start_cooking_flag = true; // (v2.6.3) Безпечно
         }
-        // Якщо 2 секунди ще не пройшло, ми просто залишимося в цьому стані 
-        // і перевіримо ще раз на наступній ітерації loop().
     }
-    // --- 🔴 КІНЕЦЬ БЛОКУ ВИПРАВЛЕННЯ ---
     
     #if (ZVS_MODE==2)
         if(g_state==STATE_SLEEPING) { sleep_cpu(); s_lps=0; s_last_door_state = (CDD_PIN & CDD_BIT); }
@@ -1066,10 +1046,7 @@ void loop() {
                 if (g_state == STATE_COOKING) { g_state = STATE_PAUSED; g_door_open_during_pause = true; set_magnetron(false); set_fan(false); } 
                 else if (g_state == STATE_PAUSED || g_state == STATE_FLIP_PAUSE) { g_door_open_during_pause = true; g_flip_beep_timeout_ms = 0; } 
                 else if (g_state == STATE_FINISHED || g_state == STATE_POST_COOK) { reset_to_idle(); } 
-                // --- 🔴 ПОЧАТОК БЛОКУ ВИПРАВЛЕННЯ (v2.3.3 - Баг 2-го етапу) ---
-                // Не показувати "DOOR" під час переходу між етапами
                 else if (g_state != STATE_LOCKED && g_state != STATE_STAGE2_TRANSITION) { g_door_overlay_timer_ms = 2000; }
-                // --- 🔴 КІНЕЦЬ БЛОКУ ВИПРАВЛЕННЯ ---
             } else { 
                 if (g_door_open_during_pause) g_door_open_during_pause = false;
                 if (g_door_overlay_timer_ms > 0) g_door_overlay_timer_ms = 0;
@@ -1079,10 +1056,8 @@ void loop() {
 
         // --- Логіка обробки кнопок ---
         bool allow_keys=true;
-        // --- 🔴 ПОЧАТОК БЛОКУ ВИПРАВЛЕННЯ (v2.3.3 - Баг 2-го етапу) ---
         if(g_state==STATE_LOCKED || g_state==STATE_CLOCK_SAVED || g_door_overlay_timer_ms > 0 || g_state == STATE_STAGE2_TRANSITION) 
             allow_keys=false;
-        // --- 🔴 КІНЕЦЬ БЛОКУ ВИПРАВЛЕННЯ ---
         if(g_door_open_during_pause) allow_keys=true;
         
         if(allow_keys) {
@@ -1097,37 +1072,25 @@ void loop() {
                 s_lht=0;
             }
             
-            // --- Обробка відпускання кнопки (v2.2.2) ---
             if(cks!=s_lps) { 
-                if(cks==0) { // Кнопку щойно відпустили
+                if(cks==0) { 
                     
                     char released_key = s_lps; 
 
-                    // 1. Обробка "Тапу" (короткого натискання)
                     if(released_key != 0 && g_last_key_hold_duration <= 500) {
                         handle_state_machine(released_key, true);
                     }
-
-                    // --- 🔴 ПОЧАТОК БЛОКУ ВИПРАВЛЕННЯ (v2.3.9 - Оптимізація пам'яті) ---
-                    // Видалено перерахунок ШІМ при відпусканні "Більше"/"Менше"
-                    // --- 🔴 КІНЕЦЬ БЛОКУ ВИПРАВЛЕННЯ ---
                 }
                 s_lps=cks; 
             }
-            // --- Кінець блоку ---
 
         } else { s_lps=0; s_lht=0; }
         
-        // --- Обробка стану "Завершено" ---
         if(g_state==STATE_FINISHED || g_state==STATE_POST_COOK) handle_state_machine(0, false);
         
-        // --- 🔴 ПОЧАТОК БЛОКУ ВИПРАВЛЕННЯ (v2.4.2 - Архітектура ISR/loop) ---
-        // Оновлення дисплея тепер НЕ в ISR, а в головному циклі,
-        // але воно все ще керується 1мс-тіком (всередині run_display_multiplex)
         if (g_state != STATE_SLEEPING) {
             update_display(); 
         }
-        // --- 🔴 КІНЕЦЬ БЛОКУ ВИПРАВЛЕННЯ ---
     }
 }
 

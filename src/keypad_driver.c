@@ -8,7 +8,11 @@ static volatile uint16_t g_adc_value = 1023;
 static volatile char g_debounced_key_state = 0;
 static volatile char g_key_last_state = 0;
 static volatile uint8_t g_debounce_counter = 0;
-static volatile bool g_adc_read_pending = false; // Перенесено з main
+static volatile bool g_adc_read_pending = false;
+
+// --- 🔴 ПОЧАТОК БЛОКУ ВІДКОЧЕННЯ (v2.6.2 - Повернення до v2.4.4) ---
+// (Логіка s_last_adc_check_ms видалена)
+// --- 🔴 КІНЕЦЬ БЛОКУ ВІДКОЧЕННЯ ---
 
 // Карти значень ADC
 static const uint16_t adc_key_values[] = {
@@ -39,10 +43,15 @@ char get_key_press() {
 // Логіка, що викликається з ISR таймера для опитування АЦП
 void keypad_timer_tick(void) {
     #if ENABLE_KEYPAD
+        
+        // --- 🔴 ПОЧАТОК БЛОКУ ВІДКОЧЕННЯ (v2.6.2 - Повернення до v2.4.4) ---
+        // Повертаємо лічильник 'kp', оскільки ISR знову стабільний
         static uint8_t kp = 0;
         kp++; 
         if(kp >= 20) { // Кожні 20 мс
             kp = 0; 
+        // --- 🔴 КІНЕЦЬ БЛОКУ ВІДКОЧЕННЯ ---
+
             if(!g_adc_read_pending) { 
                 ADCSRA |= (1<<ADSC); 
                 g_adc_read_pending = true; 
@@ -65,7 +74,6 @@ void keypad_timer_tick(void) {
             
             // --- 🔴 ПОЧАТОК БЛОКУ ВИПРАВЛЕННЯ (v2.4.3 - Виправлення Debounce) ---
             // Це оригінальна, правильна логіка з v2.2.0.
-            // Вона коректно обробляє і натискання, і відпускання.
             if(ck == g_key_last_state) { 
                 if(g_debounce_counter < DEBOUNCE_TIME) 
                     g_debounce_counter++; 
@@ -75,6 +83,8 @@ void keypad_timer_tick(void) {
                 g_debounce_counter = 0; 
                 g_key_last_state = ck; 
             } 
+            // (Видалено 'if (ck == 0)')
+            // --- 🔴 КІНЕЦЬ БЛОКУ ВИПРАВЛЕННЯ ---
         }
     #endif
 }

@@ -78,10 +78,7 @@ extern volatile AppState_t g_state;
 extern volatile uint32_t g_millis_counter; 
 extern volatile uint16_t g_timer_ms; 
 
-// --- 🔴 ПОЧАТОК БЛОКУ ВИПРАВЛЕННЯ (v2.4.4 - Правильна Архітектура ISR/loop) ---
 extern volatile bool g_1sec_tick_flag; // Прапор для 1-сек логіки в loop()
-// (Прапор g_1ms_tick_flag видалено)
-// --- 🔴 КІНЕЦЬ БЛОКУ ВИПРАВЛЕННЯ ---
 
 extern volatile uint16_t g_beep_ms_counter;
 extern volatile uint16_t g_beep_flip_sequence_timer;
@@ -128,6 +125,10 @@ extern volatile bool g_clock_24hr_mode;
 extern volatile DefrostFlipInfo_t g_defrost_flip_info;
 
 
+// 🔽🔽🔽 (v2.6.3) Зміна: Додано прапор для безпечного старту 🔽🔽🔽
+extern volatile bool g_start_cooking_flag; 
+
+
 extern const uint16_t power_levels_watt[];
 #define ADAPTIVE_PWM_THRESHOLD_SEC 30
 #define MIN_SAFE_ON_TIME_SEC 5U
@@ -136,7 +137,7 @@ extern const uint16_t power_levels_watt[];
 #define MAGNETRON_COAST_TIME_SEC 10 
 
 // ============================================================================
-// --- 🟨 ПРОТОТИПИ ОСНОВНИХ ФУНКЦІЙ ---
+// --- 🟨 ПРОТОТИПИ ФУНКЦІЙ ---
 // ============================================================================
 // (Визначені у microwave_firmware.c)
 
@@ -167,9 +168,6 @@ void handle_time_input_odometer(char key);
 void handle_clock_input(char key);
 void setup_timer1_1ms();
 
-// --- 🔴 ПОЧАТОК БЛОКУ ВИПРАВЛЕННЯ (v2.4.4 - Архітектура ISR/loop) ---
-// (run_1ms_tasks() видалено, її код повернуто в ISR)
 void run_1sec_tasks(void); // Нова функція для "важкої" логіки
-// --- 🔴 КІНЕЦЬ БЛОКУ ВИПРАВЛЕННЯ ---
 
 #endif // MICROWAVE_FIRMWARE_H_
