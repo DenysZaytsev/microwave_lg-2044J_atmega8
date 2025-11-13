@@ -7,17 +7,18 @@
 #include <avr/sleep.h>
 #include <avr/pgmspace.h>
 #include <string.h> 
-#include <stdbool.h> // Включено для підтримки 'bool'
+#include <stdbool.h> 
 
 // ============================================================================
 // --- 🔴 ГОЛОВНА КОНФІГУРАЦІЯ ---
 // ============================================================================
-#define ZVS_MODE 0
+#define ZVS_MODE 1 
 #define ENABLE_KEYPAD 1 
 
 // ============================================================================
 // --- 🟡 ТИПИ ДАНИХ (ENUMS & STRUCTS) ---
 // ============================================================================
+// (Залишаються тут, оскільки вони глобальні)
 
 typedef enum {
     COLON_OFF = 0, COLON_ON = 1, COLON_BLINK_SLOW = 2, COLON_BLINK_FAST = 3, COLON_BLINK_SUPERFAST=4
@@ -48,6 +49,7 @@ typedef struct {
 // ============================================================================
 // --- 2. АПАРАТНІ ВИЗНАЧЕННЯ ---
 // ============================================================================
+// (Залишаються тут, оскільки вони глобальні)
 #define ZVS_DDR DDRD
 #define ZVS_PIN PIND
 #define ZVS_BIT (1 << PD2)
@@ -72,13 +74,14 @@ typedef struct {
 // ============================================================================
 // --- 4. ГЛОБАЛЬНІ ЗМІННІ (ОГОЛОШЕННЯ) ---
 // ============================================================================
-// (Визначені у microwave_firmware.c, доступні для всіх модулів)
+// (Залишаються тут, оскільки вони глобальні)
 
 extern volatile AppState_t g_state;
 extern volatile uint32_t g_millis_counter; 
 extern volatile uint16_t g_timer_ms; 
 
-extern volatile bool g_1sec_tick_flag; // Прапор для 1-сек логіки в loop()
+extern volatile bool g_1sec_tick_flag; 
+extern volatile bool g_start_cooking_flag; 
 
 extern volatile uint16_t g_beep_ms_counter;
 extern volatile uint16_t g_beep_flip_sequence_timer;
@@ -105,7 +108,7 @@ extern volatile uint32_t g_magnetron_last_off_timestamp_ms;
 extern volatile uint8_t g_pwm_cycle_duration;
 extern volatile uint8_t g_pwm_cycle_counter_seconds;
 
-extern volatile uint8_t g_zvs_qualification_counter; // (v2.3.8)
+extern volatile uint8_t g_zvs_qualification_counter; 
 
 extern volatile uint16_t g_cook_time_total_sec, g_cook_original_total_time;
 extern volatile uint8_t g_cook_power_level;
@@ -125,10 +128,6 @@ extern volatile bool g_clock_24hr_mode;
 extern volatile DefrostFlipInfo_t g_defrost_flip_info;
 
 
-// 🔽🔽🔽 (v2.6.3) Зміна: Додано прапор для безпечного старту 🔽🔽🔽
-extern volatile bool g_start_cooking_flag; 
-
-
 extern const uint16_t power_levels_watt[];
 #define ADAPTIVE_PWM_THRESHOLD_SEC 30
 #define MIN_SAFE_ON_TIME_SEC 5U
@@ -137,37 +136,43 @@ extern const uint16_t power_levels_watt[];
 #define MAGNETRON_COAST_TIME_SEC 10 
 
 // ============================================================================
-// --- 🟨 ПРОТОТИПИ ФУНКЦІЙ ---
+// --- 🟨 ВКЛЮЧЕННЯ УСІХ МОДУЛІВ ---
 // ============================================================================
-// (Визначені у microwave_firmware.c)
+// Цей головний .h файл включає всі інші,
+// щоб будь-який .c файл, який включає "microwave_firmware.h",
+// мав доступ до всього.
 
-void reset_to_idle();
+#include "display_driver.h"
+#include "keypad_driver.h"
+#include "timers_isr.h"
+#include "cooking_logic.h"
+#include "auto_programs.h"
+
+// ============================================================================
+// --- 🟨 ПРОТОТИПИ ГОЛОВНОГО МОДУЛЯ ---
+// ============================================================================
+// (Прототипи функцій, що ЗАЛИШИЛИСЬ у microwave_firmware.c)
+
+/**
+ * @brief Повністю скидає всі змінні стану до початкових значень (IDLE).
+ */
+void reset_to_idle(void);
+
+/**
+ * @brief Головний автомат станів. Обробляє натискання кнопок
+ * залежно від поточного стану (g_state).
+ */
 void handle_state_machine(char key, bool allow_beep);
-bool start_cooking_cycle();
-void update_clock();
-void calculate_flip_schedule(uint8_t program_num, uint16_t weight);
-void initiate_flip_pause();
-void resume_after_flip();
-void check_flip_required();
-void update_cook_timer();
-void get_program_settings(const AutoProgramEntry* table, uint8_t len, uint16_t weight);
-void setup_hardware();
-void set_magnetron(bool on);
-void set_fan(bool on);
-void do_short_beep();
-void do_long_beep();
-void do_flip_beep();
-#if (ZVS_MODE == 2)
-void enter_sleep_mode();
-void wake_up_from_sleep();
-#endif
-void calculate_pwm_on_time();
-void recalculate_adaptive_pwm();
-void resume_cooking();
-void handle_time_input_odometer(char key);
-void handle_clock_input(char key);
-void setup_timer1_1ms();
 
-void run_1sec_tasks(void); // Нова функція для "важкої" логіки
+/**
+ * @brief Обробляє введення часу в режимі "одометра" (00:00 -> 99:50).
+ */
+void handle_time_input_odometer(char key);
+
+/**
+ * @brief Обробляє введення часу в режимі годинника (HH:MM).
+ */
+void handle_clock_input(char key);
+
 
 #endif // MICROWAVE_FIRMWARE_H_
