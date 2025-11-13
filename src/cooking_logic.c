@@ -49,11 +49,25 @@ void enter_sleep_mode() {
     // Ця реалізація спрощена
     g_state = STATE_SLEEPING; 
     set_colon_mode(COLON_OFF); 
-    set_sleep_mode(SLEEP_MODE_IDLE); 
+    
+    // --- ПІДГОТОВКА ДО ГЛИБОКОГО СНУ (POWER_DOWN) ---
+    // Вимкнення енерговитратних переривань
+    TIMSK &= ~(1<<OCIE1A);  // ВИМКНУТИ 1мс переривання Timer1 (ЕКОНОМІЯ ЕНЕРГІЇ)
+    GIMSK &= ~(1<<INT0);    // ВИМКНУТИ ZVS переривання
+    
+    // !!! ТУТ МАЄ БУТИ ВИКЛИК: 
+    setup_async_timer2_rtc();
+
+    // set_sleep_mode(SLEEP_MODE_IDLE); // ВИДАЛИТИ
+    set_sleep_mode(SLEEP_MODE_PWR_DOWN); // <--- ВИПРАВЛЕННЯ: Енергозбереження
     sleep_enable();
 }
 void wake_up_from_sleep() { 
     sleep_disable(); 
+    disable_async_timer2_rtc();
+    TIMSK |= (1<<OCIE1A);   // ВВІМКНУТИ 1мс переривання Timer1
+    GIMSK |= (1<<INT0);     // ВВІМКНУТИ ZVS переривання
+
     g_state = STATE_IDLE; 
     set_colon_mode(COLON_BLINK_SLOW);
 }

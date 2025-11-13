@@ -11,6 +11,36 @@
 // --- 🟨 РЕАЛІЗАЦІЯ ФУНКЦІЙ ---
 // ============================================================================
 
+void setup_async_timer2_rtc(void) {
+    ASSR |= (1 << AS2); // Вмикаємо асинхронний режим (clock від 32кГц)
+    TCNT2 = 0;          // Скидаємо лічильник
+    TCCR2 = 0;          // Скидаємо керуючі регістри
+    
+    // Чекаємо, поки ASSR стане стабільним (для TCNT2, TCCR2)
+    while (ASSR & ((1 << TCN2UB) | (1 << TCR2UB))) {}
+    
+    // Prescaler 128 (CS22=1, CS21=1) для 1 секунди переповнення (32768/128/256 = 1)
+    TCCR2 |= (1 << CS22) | (1 << CS21); 
+    
+    // Чекаємо, поки TCCR2 стане стабільним
+    while (ASSR & (1 << TCR2UB)) {}
+
+    // Вмикаємо переривання по переповненню Timer2
+    TIMSK |= (1 << TOIE2); 
+}
+
+void disable_async_timer2_rtc(void) {
+    TIMSK &= ~(1 << TOIE2); // Вимикаємо переривання
+    TCCR2 = 0;              // Зупиняємо Timer2
+    ASSR &= ~(1 << AS2);    // Вимикаємо асинхронний режим
+}
+
+// Обробник переривання по переповненню Timer2 (наш годинник RTC)
+ISR(TIMER2_OVF_vect) { 
+    // Це переривання викликається раз на секунду в режимі глибокого сну.
+    update_clock(); // Оновлюємо глобальний годинник
+}
+
 void setup_timer1_1ms() {
     TCCR1A=0; TCCR1B=0; TCNT1=0; 
     
@@ -70,9 +100,9 @@ void run_1sec_tasks(void) {
         }
         
         #if (ZVS_MODE==0)
+            // Годинник оновлюється щосекунди від Timer1 (якщо не на паузі)
             if(g_state != STATE_PAUSED && g_state != STATE_FLIP_PAUSE && g_state != STATE_STAGE2_TRANSITION) 
                 update_clock();
-        
         #elif (ZVS_MODE==1 || ZVS_MODE==2)
             g_zvs_watchdog_counter++; 
             
@@ -85,9 +115,10 @@ void run_1sec_tasks(void) {
                     g_zvs_present = false; 
                 } 
                 g_zvs_qualification_counter = 0; 
+                if (g_state != STATE_SLEEPING) update_clock();
                 
                 #if (ZVS_MODE==2)
-                    if (g_state != STATE_SLEEPING) enter_sleep_mode(); 
+                    if (g_state != STATE_SLEEPING) enter_sleep_mode();
                 #endif 
                 
                 if(g_state != STATE_PAUSED && g_state != STATE_FLIP_PAUSE && g_state != STATE_STAGE2_TRANSITION) 

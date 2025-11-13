@@ -40,4 +40,14 @@ void do_long_beep(void);
  */
 void do_flip_beep(void);
 
+/**
+ * @brief Налаштовує Timer2 для асинхронної роботи від 32.768 кГц кварцу (RTC).
+ */
+void setup_async_timer2_rtc(void);
+
+/**
+ * @brief Вимикає Timer2 та його переривання.
+ */
+void disable_async_timer2_rtc(void);
+
 #endif // TIMERS_ISR_H_
