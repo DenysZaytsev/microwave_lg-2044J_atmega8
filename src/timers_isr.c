@@ -155,7 +155,7 @@ ISR(TIMER1_COMPA_vect) {
     // --- 1-секундний таймер ---
     if(g_timer_ms>=1000) {
         g_timer_ms=0;
-        g_1sec_tick_flag = true; 
+        g_1sec_tick_flag = true;
     }
 }
 
