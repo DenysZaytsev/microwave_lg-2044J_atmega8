@@ -116,6 +116,8 @@ void run_1sec_tasks(void) {
 // ============================================================================
 
 ISR(TIMER1_COMPA_vect) { 
+    static uint8_t slow_task_phaser = 0; // <--- ДОДАТИ ЦЕ
+    slow_task_phaser++;                      // <--- ДОДАТИ ЦЕ
     g_millis_counter++; 
     update_colon_state(); // З display_driver
     
@@ -132,11 +134,17 @@ ISR(TIMER1_COMPA_vect) {
     } else { g_key_3sec_hold_timer_ms=0; g_last_key_hold_duration=g_key_continuous_hold_ms; g_key_continuous_hold_ms=0; g_last_key_for_hold=rk; g_key_hold_3sec_flag=false; }
 
     // --- Обробка опитування АЦП (з keypad_driver) ---
+    if ((slow_task_phaser % 2) == 0) { // <--- ДОДАТИ УМОВУ (парні)
     keypad_timer_tick(); 
+    }
 
     // --- Мультиплексування дисплея (з display_driver) ---
-    if(g_state!=STATE_SLEEPING) run_display_multiplex();
-    
+    //if(g_state!=STATE_SLEEPING) run_display_multiplex();
+    static uint8_t display_phaser = 0;
+    display_phaser++;
+    if ((slow_task_phaser % 2) == 1) { // <--- ДОДАТИ УМОВУ (непарні)
+        if(g_state!=STATE_SLEEPING) run_display_multiplex();
+    }
     g_timer_ms++; 
     
     // --- Загальні таймери (мілісекундні) ---
@@ -157,6 +165,7 @@ ISR(TIMER1_COMPA_vect) {
         g_timer_ms=0;
         g_1sec_tick_flag = true;
     }
+    if (slow_task_phaser >= 2) slow_task_phaser = 0; // <--- ДОДАТИ ЦЕ
 }
 
 #if (ZVS_MODE!=0)

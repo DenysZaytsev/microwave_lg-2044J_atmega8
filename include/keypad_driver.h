@@ -8,8 +8,8 @@
 // ============================================================================
 #define KEYPAD_ADC_CHANNEL 0
 #define ADC_NOISE_THRESHOLD 1015
-#define ADC_TOLERANCE 10
-#define DEBOUNCE_TIME 3 
+#define ADC_TOLERANCE 20
+#define DEBOUNCE_TIME 1 
 
 // Визначення клавіш
 #define KEY_10_MIN '1'

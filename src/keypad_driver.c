@@ -30,7 +30,17 @@ static const char adc_key_map[] = {
 
 void keypad_init() { 
     ADMUX = (1<<REFS0)|(KEYPAD_ADC_CHANNEL & 0x07); 
-    ADCSRA = (1<<ADEN)|(1<<ADPS2)|(1<<ADPS1)|(1<<ADPS0); 
+
+    #if (F_CPU == 16000000L)
+        // 16MHz / 128 = 125kHz (Ідеал)
+        ADCSRA = (1<<ADEN)|(1<<ADPS2)|(1<<ADPS1)|(1<<ADPS0);
+    #elif (F_CPU == 8000000L)
+        // 8MHz / 64 = 125kHz (Ідеал)
+        ADCSRA = (1<<ADEN)|(1<<ADPS2)|(1<<ADPS1);
+    #else
+        // Стандартне налаштування, якщо частота невідома
+        ADCSRA = (1<<ADEN)|(1<<ADPS2)|(1<<ADPS1)|(1<<ADPS0);
+    #endif
 }
 
 char get_key_press() { 
@@ -48,7 +58,7 @@ void keypad_timer_tick(void) {
         // Повертаємо лічильник 'kp', оскільки ISR знову стабільний
         static uint8_t kp = 0;
         kp++; 
-        if(kp >= 20) { // Кожні 20 мс
+        if(kp >= 10) { // Кожні 10 мс
             kp = 0; 
         // --- 🔴 КІНЕЦЬ БЛОКУ ВІДКОЧЕННЯ ---
 
