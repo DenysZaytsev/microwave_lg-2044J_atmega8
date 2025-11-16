@@ -13,13 +13,14 @@
 
 // (v2.9.0) ВИДАЛЕНО setup_async_timer2_rtc, disable_async_timer2_rtc та ISR(TIMER2_OVF_vect)
 
-void setup_timer1_1ms() {
+// (v2.9.32) Змінено на 500µs (2000Hz)
+void setup_timer1_500us() {
     TCCR1A=0; TCCR1B=0; TCNT1=0; 
     
     #if (F_CPU == 16000000L)
-        OCR1A = 1999; // 16МГц / 8 / 2000 = 1000Hz
+        OCR1A = 999; // 16МГц / 8 / 1000 = 2000Hz (було 1999)
     #elif (F_CPU == 8000000L)
-        OCR1A = 999; // 8МГц / 8 / 1000 = 1000Hz
+        OCR1A = 499; // 8МГц / 8 / 500 = 2000Hz (було 999)
     #else
         #error "Непідтримувана F_CPU. Використовуйте 8МГц або 16МГц."
     #endif
@@ -82,30 +83,20 @@ void run_1sec_tasks(void) {
 // ============================================================================
 
 ISR(TIMER1_COMPA_vect) { 
-    static uint8_t slow_task_phaser = 0; 
-    slow_task_phaser++;
-    g_millis_counter++; 
+    // (v2.9.32) Зміни для 1кГц тону
+    static uint8_t prescaler_1ms = 0; // Дільник для 1ms логіки
     
-    // (v2.9.2) 16-бітний "знімок" часу для INT0
-    g_millis_16bit_snapshot = (uint16_t)g_millis_counter;
-    
-    update_colon_state(); // З display_driver
-    
-    // 🔽🔽🔽 (v2.9.31) ОНОВЛЕНА ЛОГІКА ЗВУКУ ДЛЯ ПАСИВНОГО ЗУМЕРА 🔽🔽🔽
-    
-    // 1. Головний драйвер тону (500 Гц) - він керує g_beep_ms_counter
+    // 1. Логіка звуку (виконується кожні 500µs для 1kHz тону)
     if (g_beep_ms_counter > 0) { 
-        BEEPER_PORT ^= BEEPER_BIT; // Toggles pin every 1ms
+        BEEPER_PORT ^= BEEPER_BIT; // Toggles pin every 0.5ms = 1kHz tone
         g_beep_ms_counter--; 
     } else {
-        // Якщо g_beep_ms_counter == 0, АЛЕ burst-таймер НЕ хоче увімкнути
-        // (ми перевіримо це нижче), тоді пін має бути LOW.
         if (g_clock_save_burst_timer == 0 || (g_clock_save_burst_timer % 100) != 50) {
              BEEPER_PORT &= ~BEEPER_BIT;
         }
     }
-    
-    // 2. Логіка "burst" (збереження годинника) - вона ТРИГЕРИТЬ g_beep_ms_counter
+
+    // 2. Логіка "burst" (збереження годинника)
     if (g_clock_save_burst_timer > 0) { 
         g_clock_save_burst_timer--; 
         if ((g_clock_save_burst_timer % 100) == 50) {
@@ -123,8 +114,25 @@ ISR(TIMER1_COMPA_vect) {
             g_beep_flip_sequence_timer = 0; 
         } 
     }
-    // 🔼🔼🔼 (v2.9.31) КІНЕЦЬ ОНОВЛЕННЯ ЛОГІКИ ЗВУКУ 🔼🔼🔼
 
+    // 4. Дільник (Phaser) для 1ms логіки
+    prescaler_1ms++;
+    if (prescaler_1ms < 2) {
+        return; // Пропускаємо, поки не пройде 1ms (2 цикли * 500µs)
+    }
+    prescaler_1ms = 0; // Скидаємо дільник
+    
+    // 🔽🔽🔽 УСЯ РЕШТА ЛОГІКИ (ВИКОНУЄТЬСЯ КОЖНІ 1ms) 🔽🔽🔽
+    
+    static uint8_t slow_task_phaser = 0; 
+    slow_task_phaser++;
+    g_millis_counter++; 
+    
+    // (v2.9.2) 16-бітний "знімок" часу для INT0
+    g_millis_16bit_snapshot = (uint16_t)g_millis_counter;
+    
+    update_colon_state(); // З display_driver
+    
     // --- Обробка утримання кнопок ---
     char rk = get_key_press(); // З keypad_driver
     if (rk == g_last_key_for_hold && rk != 0) {
@@ -172,7 +180,7 @@ ISR(TIMER1_COMPA_vect) {
 
 #if (ZVS_MODE!=0)
 ISR(INT0_vect) {
-    // (v2.9.8) Спрощена логіка 
+    // 🔽🔽🔽 (v2.9.33) ВИДАЛЕНО ЗВЕРНЕННЯ ДО g_zvs_timestamps 🔽🔽🔽
     if (g_state == STATE_ZVS_QUALIFICATION && g_zvs_qualification_counter < ZVS_QUALIFICATION_COUNT) {
         
         // (v2.9.8) Видалено запис в g_zvs_timestamps
