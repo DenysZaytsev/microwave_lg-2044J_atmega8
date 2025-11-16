@@ -91,10 +91,39 @@ ISR(TIMER1_COMPA_vect) {
     
     update_colon_state(); // З display_driver
     
-    // --- Обробка звуку ---
-    if (g_beep_ms_counter > 0) { if(g_beep_ms_counter == 800 || g_beep_ms_counter == 300) BEEPER_PORT|=BEEPER_BIT; g_beep_ms_counter--; if(g_beep_ms_counter == 0) BEEPER_PORT&=~BEEPER_BIT; }
-    if (g_clock_save_burst_timer > 0) { g_clock_save_burst_timer--; if ((g_clock_save_burst_timer % 100) == 50) BEEPER_PORT |= BEEPER_BIT; else if ((g_clock_save_burst_timer % 100) == 0) BEEPER_PORT &= ~BEEPER_BIT; if (g_clock_save_burst_timer == 0) BEEPER_PORT &= ~BEEPER_BIT; }
-    if (g_beep_flip_sequence_timer > 0) { if (g_beep_flip_sequence_timer == 1 || g_beep_flip_sequence_timer == 601 || g_beep_flip_sequence_timer == 1201) { do_short_beep(); } g_beep_flip_sequence_timer++; if (g_flip_beep_timeout_ms == 0 || g_beep_flip_sequence_timer > 1501) { g_beep_flip_sequence_timer = 0; } }
+    // 🔽🔽🔽 (v2.9.31) ОНОВЛЕНА ЛОГІКА ЗВУКУ ДЛЯ ПАСИВНОГО ЗУМЕРА 🔽🔽🔽
+    
+    // 1. Головний драйвер тону (500 Гц) - він керує g_beep_ms_counter
+    if (g_beep_ms_counter > 0) { 
+        BEEPER_PORT ^= BEEPER_BIT; // Toggles pin every 1ms
+        g_beep_ms_counter--; 
+    } else {
+        // Якщо g_beep_ms_counter == 0, АЛЕ burst-таймер НЕ хоче увімкнути
+        // (ми перевіримо це нижче), тоді пін має бути LOW.
+        if (g_clock_save_burst_timer == 0 || (g_clock_save_burst_timer % 100) != 50) {
+             BEEPER_PORT &= ~BEEPER_BIT;
+        }
+    }
+    
+    // 2. Логіка "burst" (збереження годинника) - вона ТРИГЕРИТЬ g_beep_ms_counter
+    if (g_clock_save_burst_timer > 0) { 
+        g_clock_save_burst_timer--; 
+        if ((g_clock_save_burst_timer % 100) == 50) {
+            g_beep_ms_counter = 50; // Запускаємо 50ms біп
+        } 
+    } 
+    
+    // 3. Логіка Flip (яка викликає do_short_beep)
+    if (g_beep_flip_sequence_timer > 0) { 
+        if (g_beep_flip_sequence_timer == 1 || g_beep_flip_sequence_timer == 601 || g_beep_flip_sequence_timer == 1201) { 
+            do_short_beep(); // Це встановить g_beep_ms_counter = 300
+        } 
+        g_beep_flip_sequence_timer++; 
+        if (g_flip_beep_timeout_ms == 0 || g_beep_flip_sequence_timer > 1501) { 
+            g_beep_flip_sequence_timer = 0; 
+        } 
+    }
+    // 🔼🔼🔼 (v2.9.31) КІНЕЦЬ ОНОВЛЕННЯ ЛОГІКИ ЗВУКУ 🔼🔼🔼
 
     // --- Обробка утримання кнопок ---
     char rk = get_key_press(); // З keypad_driver
@@ -143,7 +172,7 @@ ISR(TIMER1_COMPA_vect) {
 
 #if (ZVS_MODE!=0)
 ISR(INT0_vect) {
-    // 🔽🔽🔽 (v2.9.8) Спрощена логіка 🔽🔽🔽
+    // (v2.9.8) Спрощена логіка 
     if (g_state == STATE_ZVS_QUALIFICATION && g_zvs_qualification_counter < ZVS_QUALIFICATION_COUNT) {
         
         // (v2.9.8) Видалено запис в g_zvs_timestamps

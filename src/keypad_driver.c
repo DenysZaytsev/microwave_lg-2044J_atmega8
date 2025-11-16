@@ -16,12 +16,21 @@ static volatile bool g_adc_read_pending = false;
 
 // Карти значень ADC
 static const uint16_t adc_key_values[] = {
-    1003, 964, 926, 887, 848, 820, 744, 606, 539, 494, 395, 350
+    // 🔽🔽🔽 (v2.9.27) ЗМІНЕНО ПОРЯДОК ДЛЯ ВИРІШЕННЯ КОНФЛІКТУ 1хв/10хв 🔽🔽🔽
+    1003, 964, 926, 887, 
+    820, // KEY_10_MIN (Перевіряється до 848)
+    848, // KEY_1_MIN
+    744, 606, 539, 494, 395, 350
+    // 🔼🔼🔼 (v2.9.27) КІНЕЦЬ ОНОВЛЕННЯ 🔼🔼🔼
 };
 static const char adc_key_map[] = { 
+    // 🔽🔽🔽 (v2.9.27) ЗМІНЕНО ПОРЯДОК ДЛЯ ВИРІШЕННЯ КОНФЛІКТУ 1хв/10хв 🔽🔽🔽
     KEY_AUTO_COOK, KEY_AUTO_DEFROST, KEY_QUICK_DEFROST, KEY_10_SEC, 
-    KEY_1_MIN, KEY_10_MIN, KEY_LESS, KEY_MORE, KEY_MICRO, 
+    KEY_10_MIN, // Індекс 4
+    KEY_1_MIN,  // Індекс 5
+    KEY_LESS, KEY_MORE, KEY_MICRO, 
     KEY_START_QUICKSTART, KEY_STOP_RESET, KEY_CLOCK 
+    // 🔼🔼🔼 (v2.9.27) КІНЕЦЬ ОНОВЛЕННЯ 🔼🔼🔼
 };
 
 // ============================================================================
@@ -62,6 +71,14 @@ void keypad_timer_tick(void) {
         // --- 🔴 КІНЕЦЬ БЛОКУ ВІДКОЧЕННЯ ---
 
             if(!g_adc_read_pending) { 
+                
+                #if (ZVS_MODE != 0)
+                // (v2.9.26) "ЗАХИСТ" АЦП: ВИМИКАЄМО ZVS (INT0) ТІЛЬКИ НЕ ПІД ЧАС ГОТУВАННЯ
+                if (g_state != STATE_COOKING) {
+                    GIMSK &= ~(1<<INT0); 
+                }
+                #endif
+                
                 ADCSRA |= (1<<ADSC); 
                 g_adc_read_pending = true; 
             } 
@@ -70,10 +87,19 @@ void keypad_timer_tick(void) {
         if(g_adc_read_pending && !(ADCSRA & (1<<ADSC))) { 
             g_adc_value = ADC; 
             g_adc_read_pending = false; 
+            
+            #if (ZVS_MODE != 0)
+            // (v2.9.26) ПОВЕРТАЄМО ZVS (INT0), ЯКЩО ВИМИКАЛИ
+            if (g_state != STATE_COOKING) {
+                GIMSK |= (1<<INT0);
+            }
+            #endif
+            
             char ck = 0; 
             
             if(g_adc_value < ADC_NOISE_THRESHOLD) { 
                 for(uint8_t i=0; i < 12; i++) { 
+                    // (v2.9.26) Повернено оригінальний допуск
                     if(g_adc_value >= (adc_key_values[i] - ADC_TOLERANCE) && g_adc_value <= (adc_key_values[i] + ADC_TOLERANCE)) { 
                         ck = adc_key_map[i]; 
                         break; 
