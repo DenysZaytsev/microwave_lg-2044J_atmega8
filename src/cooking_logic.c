@@ -38,19 +38,13 @@ void set_fan(bool on) { if (on) FAN_PORT |= FAN_BIT; else FAN_PORT &= ~FAN_BIT; 
 void setup_hardware() {
     DDRD &= ~ZVS_BIT; 
     CDD_DDR &= ~CDD_BIT; 
-    // 🔽🔽🔽 ВИМКНЕННЯ ВНУТРІШНЬОГО PULL-UP (5В=Закрито, 0В/Фейл=Відкрито) (v2.9.0) 🔽🔽🔽
+    // (v2.9.0) ВИМКНЕННЯ ВНУТРІШНЬОГО PULL-UP (5В=Закрито, 0В/Фейл=Відкрито)
     CDD_PORT &= ~CDD_BIT; 
     MAGNETRON_DDR |= MAGNETRON_BIT; MAGNETRON_PORT &= ~MAGNETRON_BIT;
     FAN_DDR |= FAN_BIT; FAN_PORT &= ~FAN_BIT;
     BEEPER_DDR |= BEEPER_BIT; BEEPER_PORT &= ~BEEPER_BIT;
 }
-// 🔽🔽🔽 ВИДАЛЕНО ЛОГІКУ ZVS_MODE 2 (v2.9.0) 🔽🔽🔽
-/*
-#if (ZVS_MODE == 2)
-void enter_sleep_mode() { ... }
-void wake_up_from_sleep() { ... }
-#endif
-*/
+// (v2.9.0) ВИДАЛЕНО ЛОГІКУ ZVS_MODE 2
 
 void calculate_pwm_on_time() {
     if (g_cook_power_level == 0) { 
@@ -93,10 +87,9 @@ void recalculate_adaptive_pwm() {
 }
 
 bool start_cooking_cycle() {
-    // 🔽🔽🔽 ІНВЕРТОВАНА ПЕРЕВІРКА ДВЕРЕЙ (0В=Відкрито) (v2.9.0) 🔽🔽🔽
+    // (v2.9.0) ІНВЕРТОВАНА ПЕРЕВІРКА ДВЕРЕЙ (0В=Відкрито)
     if (!(CDD_PIN & CDD_BIT)) {
         do_short_beep();
-        // reset_to_idle() викликається з головного loop()
         return false;
     }
 
@@ -112,7 +105,7 @@ bool start_cooking_cycle() {
 }
 
 void resume_cooking() {
-    // 🔽🔽🔽 ПЕРЕВІРКА ДВЕРЕЙ (5В=Закрито) (v2.9.0) 🔽🔽🔽
+    // (v2.9.0) ПЕРЕВІРКА ДВЕРЕЙ (5В=Закрито)
     if ((CDD_PIN & CDD_BIT)) { 
         g_state=STATE_COOKING; 
         set_colon_mode(COLON_ON); 
@@ -142,7 +135,21 @@ void resume_cooking() {
 
 void update_cook_timer() {
     if (g_state == STATE_COOKING && g_cook_time_total_sec > 0) {
-        if (g_cook_time_total_sec <= 3 && g_stage2_time_sec == 0) do_long_beep();
+        
+        // 🔽🔽🔽 (v2.9.38) ЗАПУСК СЕКВЕНСЕРІВ МЕЛОДІЙ 🔽🔽🔽
+        if (g_cook_time_total_sec == 3) {
+             
+             if (g_stage2_time_sec > 0) { // Це 1-й етап
+                 if (g_stage1_beep_counter == 0) { // Запускаємо 1x3
+                      g_stage1_beep_sequencer_ms = 1; 
+                 }
+             } else { // Це 2-й (фінальний) етап
+                 if (g_final_beep_counter == 0) { // Запускаємо 3x3
+                      g_final_beep_sequencer_ms = 1; 
+                 }
+             }
+        }
+        // 🔼🔼🔼 (v2.9.38) КІНЕЦЬ ЗМІН 🔼🔼🔼
         
         g_cook_time_total_sec--; 
         check_flip_required();

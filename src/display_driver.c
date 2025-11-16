@@ -155,7 +155,7 @@ void run_display_multiplex() {
 
 void update_display() {
     if (g_door_overlay_timer_ms > 0) { 
-        // 🔽🔽🔽 (v2.9.2) ВИДАЛЕНО ЛОГІКУ "ERR-". Завжди показуємо "DOOR" 🔽🔽🔽
+        // (v2.9.2) ВИДАЛЕНО ЛОГІКУ "ERR-". Завжди показуємо "DOOR"
         set_display(CHAR_D, CHAR_O, CHAR_O, CHAR_R); 
         set_colon_mode(COLON_OFF); 
         return; 
@@ -274,9 +274,13 @@ void update_display() {
             break;
         
         case STATE_COOKING: 
-            set_colon_mode(COLON_ON);
+            // 🔽🔽🔽 (v2.9.40) ВИПРАВЛЕННЯ ДВОКРАПКИ "END" 🔽🔽🔽
             if(g_cook_time_total_sec <= 5) {
+                // Останні 5 секунд: мерехтіння
                 if (g_timer_ms < 750) { 
+                    // Показуємо "End" - ДВОКРАПКА ВИМКНЕНА
+                    set_colon_mode(COLON_OFF); 
+                    
                     if (g_stage2_time_sec > 0) 
                         set_display(CHAR_E, CHAR_N, CHAR_D, 1); // "End1"
                     else if (g_was_two_stage_cook) 
@@ -284,12 +288,18 @@ void update_display() {
                     else 
                         set_display(CHAR_E, CHAR_N, CHAR_D, CHAR_DASH); // "End-"
                 }
-                else 
+                else {
+                    // Показуємо залишок часу - ДВОКРАПКА УВІМКНЕНА
+                    set_colon_mode(COLON_ON);
                     display_time_suppressed(g_cook_time_total_sec); 
+                }
             } else {
+                // Звичайне приготування (> 5 сек)
+                set_colon_mode(COLON_ON);
                 display_time_suppressed(g_cook_time_total_sec);
             }
             break;
+            // 🔼🔼🔼 (v2.9.40) КІНЕЦЬ ЗМІН 🔼🔼🔼
             
         case STATE_FINISHED: 
         case STATE_POST_COOK: 

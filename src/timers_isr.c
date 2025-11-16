@@ -4,8 +4,6 @@
 #include "keypad_driver.h"  // Потрібен для get_key_press, keypad_timer_tick
 
 // (v2.9.2) Видалено невикористовувані константи
-// #define ZVS_MIN_PULSES_PER_SEC 40 
-// #define ZVS_QUALIFICATION_SECONDS 2 
 
 // ============================================================================
 // --- 🟨 РЕАЛІЗАЦІЯ ФУНКЦІЙ ---
@@ -42,8 +40,11 @@ void update_clock() {
     } 
 }
 
-void do_short_beep() { if (g_beep_ms_counter == 0) g_beep_ms_counter = 300; }
-void do_long_beep() { if (g_beep_ms_counter == 0) g_beep_ms_counter = 800; }
+// 🔽🔽🔽 (v2.9.36) Повертаємо do_long_beep до 800ms 🔽🔽🔽
+void do_short_beep() { if (g_beep_ms_counter == 0) g_beep_ms_counter = 150; } // Залишаємо 150
+void do_long_beep() { if (g_beep_ms_counter == 0) g_beep_ms_counter = 800; } // Було 1000
+// 🔼🔼🔼 (v2.9.36) Кінець змін 🔼🔼🔼
+
 void do_flip_beep() { if (g_beep_flip_sequence_timer == 0) g_beep_flip_sequence_timer = 1; }
 
 void run_1sec_tasks(void) {
@@ -100,14 +101,15 @@ ISR(TIMER1_COMPA_vect) {
     if (g_clock_save_burst_timer > 0) { 
         g_clock_save_burst_timer--; 
         if ((g_clock_save_burst_timer % 100) == 50) {
-            g_beep_ms_counter = 50; // Запускаємо 50ms біп
+            // (v2.9.34) Використовуємо коротший біп
+            g_beep_ms_counter = 25; // Запускаємо 25ms біп
         } 
     } 
     
     // 3. Логіка Flip (яка викликає do_short_beep)
     if (g_beep_flip_sequence_timer > 0) { 
         if (g_beep_flip_sequence_timer == 1 || g_beep_flip_sequence_timer == 601 || g_beep_flip_sequence_timer == 1201) { 
-            do_short_beep(); // Це встановить g_beep_ms_counter = 300
+            do_short_beep(); // Це встановить g_beep_ms_counter = 150
         } 
         g_beep_flip_sequence_timer++; 
         if (g_flip_beep_timeout_ms == 0 || g_beep_flip_sequence_timer > 1501) { 
@@ -124,8 +126,6 @@ ISR(TIMER1_COMPA_vect) {
     
     // 🔽🔽🔽 УСЯ РЕШТА ЛОГІКИ (ВИКОНУЄТЬСЯ КОЖНІ 1ms) 🔽🔽🔽
     
-    static uint8_t slow_task_phaser = 0; 
-    slow_task_phaser++;
     g_millis_counter++; 
     
     // (v2.9.2) 16-бітний "знімок" часу для INT0
@@ -133,54 +133,21 @@ ISR(TIMER1_COMPA_vect) {
     
     update_colon_state(); // З display_driver
     
-    // --- Обробка утримання кнопок ---
-    char rk = get_key_press(); // З keypad_driver
-    if (rk == g_last_key_for_hold && rk != 0) {
-        if (!g_key_hold_3sec_flag && g_key_3sec_hold_timer_ms < 3000) { g_key_3sec_hold_timer_ms++; if(g_key_3sec_hold_timer_ms==3000) g_key_hold_3sec_flag=true; }
-        if (g_key_continuous_hold_ms < 65000) g_key_continuous_hold_ms++;
-    } else { g_key_3sec_hold_timer_ms=0; g_last_key_hold_duration=g_key_continuous_hold_ms; g_key_continuous_hold_ms=0; g_last_key_for_hold=rk; g_key_hold_3sec_flag=false; }
-
-    // --- Обробка опитування АЦП (з keypad_driver) ---
-    keypad_timer_tick(); 
-
-    // --- Мультиплексування дисплея (з display_driver) ---
-    static uint8_t display_phaser = 0;
-    display_phaser++;
-    run_display_multiplex(); // (v2.9.2) Видалено перевірку STATE_SLEEPING
     g_timer_ms++; 
-    
-    // --- Загальні таймери (мілісекундні) ---
-    if(g_quick_start_delay_ms>0) { 
-        g_quick_start_delay_ms--; 
-        if(g_quick_start_delay_ms==0 && g_state==STATE_QUICK_START_PREP) 
-            g_start_cooking_flag = true; 
-    }
-
-    if(g_state==STATE_FINISHED) { g_post_cook_timer_ms++; if(g_post_cook_timer_ms >= 30000) { g_state=STATE_POST_COOK; g_post_cook_timer_ms=0; g_post_cook_sec_counter = 0; do_long_beep(); } } 
-    else if(g_state==STATE_POST_COOK) { g_post_cook_timer_ms++; }
-    if(g_clock_save_blink_ms>0) { g_clock_save_blink_ms--; if(g_clock_save_blink_ms==0) g_state = STATE_IDLE; }
-    if(g_door_overlay_timer_ms > 0) g_door_overlay_timer_ms--;
-    if (g_flip_beep_timeout_ms > 0) g_flip_beep_timeout_ms--;
-    
-    #if (ZVS_MODE != 0)
-    // (v2.9.3) МАКСИМАЛЬНО СПРОЩЕНИЙ ТАЙМАУТ
-    // ISR тільки зменшує лічильник. Вся логіка обробки перенесена в loop()
-    if (g_zvs_qual_timeout_ms > 0) {
-        g_zvs_qual_timeout_ms--;
-    }
-    #endif
     
     // --- 1-секундний таймер ---
     if(g_timer_ms>=1000) {
         g_timer_ms=0;
         g_1sec_tick_flag = true;
     }
-    if (slow_task_phaser >= 2) slow_task_phaser = 0; 
+
+    // Встановлюємо прапор для loop()
+    g_1ms_tick_flag = true;
 }
 
 #if (ZVS_MODE!=0)
 ISR(INT0_vect) {
-    // 🔽🔽🔽 (v2.9.33) ВИДАЛЕНО ЗВЕРНЕННЯ ДО g_zvs_timestamps 🔽🔽🔽
+    // (v2.9.8) Спрощена логіка 
     if (g_state == STATE_ZVS_QUALIFICATION && g_zvs_qualification_counter < ZVS_QUALIFICATION_COUNT) {
         
         // (v2.9.8) Видалено запис в g_zvs_timestamps

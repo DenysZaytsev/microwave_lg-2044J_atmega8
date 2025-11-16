@@ -1,12 +1,14 @@
 /*
- * ПОВНА ПРОШИВКА МІКРОХВИЛЬОВКИ (v_final_2.9.32 - 1kHz Beep)
+ * ПОВНА ПРОШИВКА МІКРОХВИЛЬОВКИ (v_final_2.9.38 - Мелодія 1x3 та 3x3)
  *
- * --- ОПИС ФУНКЦІОНАЛУ v2.9.32 ---
- * 1. (v2.9.32) ЗМІНА: Timer1 тепер працює на 2000Hz (500µs) для генерації 1kHz тону.
- * 2. (v2.9.32) ЗМІНА: ISR(TIMER1_COMPA_vect) тепер має дільник (phaser) для 1ms логіки.
- * 3. (v2.9.3) ОПТИМІЗАЦІЯ: Винесено логіку таймауту ZVS з ISR(TIMER1_COMPA_vect) в loop().
- * 4. (v2.9.2) ВИДАЛЕНО: Повністю видалено STATE_SLEEPING.
- * 5. (v2.9.0) ВИПРАВЛЕНО: Інвертована логіка дверей (5В=Закрито, 0В=Відкрито).
+ * --- ОПИС ФУНКЦІОНАЛУ v2.9.38 ---
+ * 1. (v2.9.38) ДОДАНО: Секвенсер для мелодії 1x3 (3 біпи) для 1-го етапу.
+ * 2. (v2.9.38) ЗМІНА: update_cook_timer тепер запускає 1x3 (Етап 1) або 3x3 (Етап 2).
+ * 3. (v2.9.38) ВИПРАВЛЕНО: Двокрапка тепер ВИМКНЕНА під час "End1", "End2" (для консистенції).
+ * 4. (v2.9.35) ОПТИМІЗАЦІЯ: Вся 1ms логіка (кнопки, дисплей) винесена з ISR в loop().
+ * 5. (v2.9.32) ЗМІНА: Timer1 працює на 2000Hz (500µs) для 1kHz тону.
+ * 6. (v2.9.2) ВИДАЛЕНО: Повністю видалено STATE_SLEEPING.
+ * 7. (v2.9.0) ВИПРАВЛЕНО: Інвертована логіка дверей (5В=Закрито, 0В=Відкрито).
  */
 
 // ============================================================================
@@ -31,6 +33,9 @@ volatile uint16_t g_millis_16bit_snapshot = 0;
 
 volatile bool g_1sec_tick_flag = false;
 volatile bool g_start_cooking_flag = false; 
+
+// (v2.9.35) Прапор 1ms
+volatile bool g_1ms_tick_flag = false;
 
 volatile uint16_t g_beep_ms_counter = 0;
 volatile uint16_t g_beep_flip_sequence_timer = 0;
@@ -80,6 +85,14 @@ volatile uint16_t g_zvs_qual_timeout_ms = 0;
 // volatile bool g_zvs_error_flag = false; // Видалено
 #endif
 
+// 🔽🔽🔽 (v2.9.38) ЗМІННІ ДЛЯ МЕЛОДІЇ 🔽🔽🔽
+volatile uint16_t g_final_beep_sequencer_ms = 0;
+volatile uint8_t g_final_beep_counter = 0;
+volatile uint16_t g_stage1_beep_sequencer_ms = 0;
+volatile uint8_t g_stage1_beep_counter = 0;
+// 🔼🔼🔼 (v2.9.38) КІНЕЦЬ ЗМІН 🔼🔼🔼
+
+
 volatile uint8_t g_clock_save_beep_phaser = 0; 
 
 
@@ -111,7 +124,17 @@ void reset_to_idle() {
     g_zvs_qual_timeout_ms = 0;
     #endif
     
+    // 🔽🔽🔽 (v2.9.38) Скидання мелодії 🔽🔽🔽
+    g_final_beep_sequencer_ms = 0;
+    g_final_beep_counter = 0;
+    g_stage1_beep_sequencer_ms = 0;
+    g_stage1_beep_counter = 0;
+    
     g_start_cooking_flag = false; 
+
+    // (v2.9.35) Скидання прапорів
+    g_1sec_tick_flag = false;
+    g_1ms_tick_flag = false;
 
     g_clock_save_beep_phaser = 0; 
 }
@@ -536,12 +559,11 @@ void setup() {
         keypad_init();    // з keypad_driver
     #endif
     
-    // 🔽🔽🔽 (v2.9.32) Змінено на 500µs 🔽🔽🔽
+    // (v2.9.32) Змінено на 500µs
     setup_timer1_500us();   // з timers_isr
     
     #if (ZVS_MODE!=0)
         MCUCR|=(1<<ISC01); MCUCR&=~(1<<ISC00); GIMSK|=(1<<INT0); 
-        // (v2.9.2) Видалено: g_zvs_watchdog_counter=0; g_zvs_present=false;
     #endif
     
     reset_to_idle(); 
@@ -552,6 +574,105 @@ void setup() {
 void loop() {
     static char s_lps=0; static uint16_t s_lht=0; char cks=0;
     static bool s_last_door_state = false;
+
+    // 🔽🔽🔽 (v2.9.35) ЛОГІКА 1MS ПЕРЕНЕСЕНА З ISR(TIMER1) В LOOP() 🔽🔽🔽
+    if (g_1ms_tick_flag) {
+        g_1ms_tick_flag = false;
+        
+        // (v2.9.35) Використовуємо локальний дільник (phaser)
+        static uint8_t slow_task_phaser = 0;
+        slow_task_phaser++;
+
+        // --- Обробка утримання кнопок ---
+        char rk = get_key_press(); // З keypad_driver
+        if (rk == g_last_key_for_hold && rk != 0) {
+            if (!g_key_hold_3sec_flag && g_key_3sec_hold_timer_ms < 3000) { g_key_3sec_hold_timer_ms++; if(g_key_3sec_hold_timer_ms==3000) g_key_hold_3sec_flag=true; }
+            if (g_key_continuous_hold_ms < 65000) g_key_continuous_hold_ms++;
+        } else { g_key_3sec_hold_timer_ms=0; g_last_key_hold_duration=g_key_continuous_hold_ms; g_key_continuous_hold_ms=0; g_last_key_for_hold=rk; g_key_hold_3sec_flag=false; }
+
+        // --- Обробка опитування АЦП (з keypad_driver) ---
+        keypad_timer_tick(); 
+
+        // --- Мультиплексування дисплея (з display_driver) ---
+        run_display_multiplex(); 
+
+        // --- Загальні таймери (мілісекундні) ---
+        if(g_quick_start_delay_ms>0) { 
+            g_quick_start_delay_ms--; 
+            if(g_quick_start_delay_ms==0 && g_state==STATE_QUICK_START_PREP) 
+                g_start_cooking_flag = true; 
+        }
+
+        if(g_state==STATE_FINISHED) { g_post_cook_timer_ms++; if(g_post_cook_timer_ms >= 30000) { g_state=STATE_POST_COOK; g_post_cook_timer_ms=0; g_post_cook_sec_counter = 0; do_long_beep(); } } 
+        else if(g_state==STATE_POST_COOK) { g_post_cook_timer_ms++; }
+        if(g_clock_save_blink_ms>0) { g_clock_save_blink_ms--; if(g_clock_save_blink_ms==0) g_state = STATE_IDLE; }
+        if(g_door_overlay_timer_ms > 0) g_door_overlay_timer_ms--;
+        if (g_flip_beep_timeout_ms > 0) g_flip_beep_timeout_ms--;
+        
+        #if (ZVS_MODE != 0)
+        // (v2.9.3) МАКСИМАЛЬНО СПРОЩЕНИЙ ТАЙМАУТ
+        if (g_state == STATE_ZVS_QUALIFICATION) {
+            if (g_zvs_qual_timeout_ms > 0) {
+                g_zvs_qual_timeout_ms--;
+            }
+        }
+        #endif
+        
+        // 🔽🔽🔽 (v2.9.38) СЕКВЕНСЕР МЕЛОДІЇ 3x3 🔽🔽🔽
+        if (g_final_beep_sequencer_ms > 0) {
+            g_final_beep_sequencer_ms--;
+            
+            // Ритм: 80мс біп, 100мс пауза, 400мс довга пауза
+            const uint16_t BEEP_DURATION = 80;
+            const uint16_t BEEP_GAP_SHORT = 100;
+            const uint16_t BEEP_GAP_LONG = 400;
+
+            if (g_final_beep_counter < 9) { // Потрібно 9 біпів
+                if (g_final_beep_sequencer_ms == 0) {
+                    
+                    // Запускаємо біп
+                    g_beep_ms_counter = BEEP_DURATION; 
+                    g_final_beep_counter++;
+                    
+                    // Встановлюємо таймер на наступну паузу
+                    if (g_final_beep_counter == 3 || g_final_beep_counter == 6) {
+                        g_final_beep_sequencer_ms = BEEP_GAP_LONG; // Довга пауза
+                    } else if (g_final_beep_counter < 9) {
+                        g_final_beep_sequencer_ms = BEEP_GAP_SHORT; // Коротка пауза
+                    }
+                }
+            } else {
+                // Всі 9 біпів зіграли
+                g_final_beep_sequencer_ms = 0; 
+            }
+        }
+        
+        // 🔽🔽🔽 (v2.9.38) СЕКВЕНСЕР МЕЛОДІЇ 1x3 (для 1-го етапу) 🔽🔽🔽
+        if (g_stage1_beep_sequencer_ms > 0) {
+            g_stage1_beep_sequencer_ms--;
+            
+            // Ритм: 150мс біп, 150мс пауза
+            const uint16_t BEEP_DURATION = 150;
+            const uint16_t BEEP_GAP = 150;
+
+            if (g_stage1_beep_counter < 3) { // Потрібно 3 біпи
+                if (g_stage1_beep_sequencer_ms == 0) {
+                    do_short_beep(); // Запускаємо 150ms біп
+                    g_stage1_beep_counter++;
+                    if (g_stage1_beep_counter < 3) {
+                        g_stage1_beep_sequencer_ms = BEEP_GAP; // Пауза
+                    }
+                }
+            } else {
+                g_stage1_beep_sequencer_ms = 0; // Завершено
+            }
+        }
+        // 🔼🔼🔼 (v2.9.38) КІНЕЦЬ СЕКВЕНСЕРІВ 🔼🔼🔼
+        
+        if (slow_task_phaser >= 2) slow_task_phaser = 0;
+    }
+    // 🔼🔼🔼 (v2.9.35) КІНЕЦЬ БЛОКУ 1MS 🔼🔼🔼
+
 
     // Обробник прапора безпечного старту (v2.6.3)
     if (g_start_cooking_flag) {
