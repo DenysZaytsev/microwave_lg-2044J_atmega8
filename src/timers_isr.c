@@ -3,43 +3,15 @@
 #include "display_driver.h" // Потрібен для update_colon_state, run_display_multiplex
 #include "keypad_driver.h"  // Потрібен для get_key_press, keypad_timer_tick
 
-// Налаштування фільтра ZVS (мінімально допустима частота)
-#define ZVS_MIN_PULSES_PER_SEC 40 
-#define ZVS_QUALIFICATION_SECONDS 2 // "2 секунди стабільності"
+// (v2.9.2) Видалено невикористовувані константи
+// #define ZVS_MIN_PULSES_PER_SEC 40 
+// #define ZVS_QUALIFICATION_SECONDS 2 
 
 // ============================================================================
 // --- 🟨 РЕАЛІЗАЦІЯ ФУНКЦІЙ ---
 // ============================================================================
 
-void setup_async_timer2_rtc(void) {
-    ASSR |= (1 << AS2); // Вмикаємо асинхронний режим (clock від 32кГц)
-    TCNT2 = 0;          // Скидаємо лічильник
-    TCCR2 = 0;          // Скидаємо керуючі регістри
-    
-    // Чекаємо, поки ASSR стане стабільним (для TCNT2, TCCR2)
-    while (ASSR & ((1 << TCN2UB) | (1 << TCR2UB))) {}
-    
-    // Prescaler 128 (CS22=1, CS21=1) для 1 секунди переповнення (32768/128/256 = 1)
-    TCCR2 |= (1 << CS22) | (1 << CS21); 
-    
-    // Чекаємо, поки TCCR2 стане стабільним
-    while (ASSR & (1 << TCR2UB)) {}
-
-    // Вмикаємо переривання по переповненню Timer2
-    TIMSK |= (1 << TOIE2); 
-}
-
-void disable_async_timer2_rtc(void) {
-    TIMSK &= ~(1 << TOIE2); // Вимикаємо переривання
-    TCCR2 = 0;              // Зупиняємо Timer2
-    ASSR &= ~(1 << AS2);    // Вимикаємо асинхронний режим
-}
-
-// Обробник переривання по переповненню Timer2 (наш годинник RTC)
-ISR(TIMER2_OVF_vect) { 
-    // Це переривання викликається раз на секунду в режимі глибокого сну.
-    update_clock(); // Оновлюємо глобальний годинник
-}
+// (v2.9.0) ВИДАЛЕНО setup_async_timer2_rtc, disable_async_timer2_rtc та ISR(TIMER2_OVF_vect)
 
 void setup_timer1_1ms() {
     TCCR1A=0; TCCR1B=0; TCNT1=0; 
@@ -75,71 +47,32 @@ void do_flip_beep() { if (g_beep_flip_sequence_timer == 0) g_beep_flip_sequence_
 
 void run_1sec_tasks(void) {
     if (g_door_overlay_timer_ms == 0) {
-            
+        
+        #if (ZVS_MODE != 0)
+        if(g_state != STATE_PAUSED && g_state != STATE_FLIP_PAUSE && g_state != STATE_STAGE2_TRANSITION && g_state != STATE_ZVS_QUALIFICATION) 
+            update_cook_timer();
+        #else
         if(g_state != STATE_PAUSED && g_state != STATE_FLIP_PAUSE && g_state != STATE_STAGE2_TRANSITION) 
             update_cook_timer();
+        #endif
+        
         
         if(g_state==STATE_POST_COOK) { 
             g_post_cook_sec_counter++;
             if(g_post_cook_sec_counter == 60) do_long_beep(); 
             else if(g_post_cook_sec_counter >= 120) { 
                 do_long_beep(); 
-                // Не викликаємо reset_to_idle() прямо звідси,
-                // Головний цикл має обробити це.
-                // Натомість, можна встановити прапор або змінити стан.
-                // Для простоти, поки що залишимо так, але це "запах" коду.
-                // Краще: g_state = STATE_IDLE; (якщо reset_to_idle() безпечний)
-                // Або встановити прапор, який loop() перетворить на reset_to_idle().
-                
-                // (v2.8.0) Оскільки reset_to_idle() безпечний, викликаємо його.
-                // (Потрібно включити "microwave_firmware.h" у "timers_isr.h")
-                // reset_to_idle(); 
-                // (v2.8.1) Ні, reset_to_idle() не є частиною цього модуля.
-                // Головний loop() має обробити це.
             } 
         }
         
-        #if (ZVS_MODE==0)
-            // Годинник оновлюється щосекунди від Timer1 (якщо не на паузі)
-            if(g_state != STATE_PAUSED && g_state != STATE_FLIP_PAUSE && g_state != STATE_STAGE2_TRANSITION) 
-                update_clock();
-        #if (ZVS_MODE==1) // Або ZVS_MODE==1 || ZVS_MODE==2, залежно від вашої конфігурації
-
-    g_zvs_watchdog_counter++; 
-
-    bool valid_pulse_train = (g_zvs_watchdog_counter == 1) && (g_zvs_pulse_counter >= ZVS_MIN_PULSES_PER_SEC);
-
-    g_zvs_pulse_counter = 0; 
-
-    // Повертаємося до простої логіки: ZVS зник? Оновлюємо годинник.
-    if(!valid_pulse_train) { 
-        if(g_zvs_present) { 
-            g_zvs_present = false; 
-        } 
+        // (v2.9.2) Годинник тепер завжди йде від Timer1.
+        #if (ZVS_MODE != 0)
+        if(g_state != STATE_PAUSED && g_state != STATE_FLIP_PAUSE && g_state != STATE_STAGE2_TRANSITION && g_state != STATE_ZVS_QUALIFICATION) 
+            update_clock();
+        #else
         if(g_state != STATE_PAUSED && g_state != STATE_FLIP_PAUSE && g_state != STATE_STAGE2_TRANSITION) 
-            update_clock(); 
-    } else {
-        g_zvs_present = true;
-    }
-    #endif 
-                
-                if(g_state != STATE_PAUSED && g_state != STATE_FLIP_PAUSE && g_state != STATE_STAGE2_TRANSITION) 
-                    update_clock(); 
-            } else {
-                if(!g_zvs_present) {
-                     g_zvs_qualification_counter++; 
-                     
-                     if (g_zvs_qualification_counter >= ZVS_QUALIFICATION_SECONDS) {
-                         g_zvs_present = true;
-                         #if (ZVS_MODE==2)
-                            if(g_state==STATE_SLEEPING) wake_up_from_sleep(); 
-                         #endif
-                     }
-                } else {
-                    g_zvs_qualification_counter = 0;
-                }
-            }
-        #endif 
+            update_clock();
+        #endif
     }
 }
 
@@ -149,9 +82,13 @@ void run_1sec_tasks(void) {
 // ============================================================================
 
 ISR(TIMER1_COMPA_vect) { 
-    static uint8_t slow_task_phaser = 0; // <--- ДОДАТИ ЦЕ
-    slow_task_phaser++;                      // <--- ДОДАТИ ЦЕ
+    static uint8_t slow_task_phaser = 0; 
+    slow_task_phaser++;
     g_millis_counter++; 
+    
+    // (v2.9.2) 16-бітний "знімок" часу для INT0
+    g_millis_16bit_snapshot = (uint16_t)g_millis_counter;
+    
     update_colon_state(); // З display_driver
     
     // --- Обробка звуку ---
@@ -167,14 +104,12 @@ ISR(TIMER1_COMPA_vect) {
     } else { g_key_3sec_hold_timer_ms=0; g_last_key_hold_duration=g_key_continuous_hold_ms; g_key_continuous_hold_ms=0; g_last_key_for_hold=rk; g_key_hold_3sec_flag=false; }
 
     // --- Обробка опитування АЦП (з keypad_driver) ---
-
     keypad_timer_tick(); 
 
     // --- Мультиплексування дисплея (з display_driver) ---
-    //if(g_state!=STATE_SLEEPING) run_display_multiplex();
     static uint8_t display_phaser = 0;
     display_phaser++;
-    if(g_state!=STATE_SLEEPING) run_display_multiplex();
+    run_display_multiplex(); // (v2.9.2) Видалено перевірку STATE_SLEEPING
     g_timer_ms++; 
     
     // --- Загальні таймери (мілісекундні) ---
@@ -186,35 +121,40 @@ ISR(TIMER1_COMPA_vect) {
 
     if(g_state==STATE_FINISHED) { g_post_cook_timer_ms++; if(g_post_cook_timer_ms >= 30000) { g_state=STATE_POST_COOK; g_post_cook_timer_ms=0; g_post_cook_sec_counter = 0; do_long_beep(); } } 
     else if(g_state==STATE_POST_COOK) { g_post_cook_timer_ms++; }
-    if(g_clock_save_blink_ms>0) { g_clock_save_blink_ms--; if(g_clock_save_blink_ms==0) g_state = STATE_IDLE; } // (v2.8.0) Безпечніше, ніж reset
+    if(g_clock_save_blink_ms>0) { g_clock_save_blink_ms--; if(g_clock_save_blink_ms==0) g_state = STATE_IDLE; }
     if(g_door_overlay_timer_ms > 0) g_door_overlay_timer_ms--;
     if (g_flip_beep_timeout_ms > 0) g_flip_beep_timeout_ms--;
+    
+    #if (ZVS_MODE != 0)
+    // (v2.9.3) МАКСИМАЛЬНО СПРОЩЕНИЙ ТАЙМАУТ
+    // ISR тільки зменшує лічильник. Вся логіка обробки перенесена в loop()
+    if (g_zvs_qual_timeout_ms > 0) {
+        g_zvs_qual_timeout_ms--;
+    }
+    #endif
     
     // --- 1-секундний таймер ---
     if(g_timer_ms>=1000) {
         g_timer_ms=0;
         g_1sec_tick_flag = true;
     }
-    if (slow_task_phaser >= 2) slow_task_phaser = 0; // <--- ДОДАТИ ЦЕ
+    if (slow_task_phaser >= 2) slow_task_phaser = 0; 
 }
 
 #if (ZVS_MODE!=0)
 ISR(INT0_vect) {
-    g_zvs_watchdog_counter = 0; 
-
-    if (g_zvs_pulse_counter < 254) g_zvs_pulse_counter++; 
-
-    if(g_magnetron_request /* && g_zvs_present - видалити, якщо додавали */) {
-        MAGNETRON_PORT |= MAGNETRON_BIT;
+    // 🔽🔽🔽 (v2.9.8) Спрощена логіка 🔽🔽🔽
+    if (g_state == STATE_ZVS_QUALIFICATION && g_zvs_qualification_counter < ZVS_QUALIFICATION_COUNT) {
+        
+        // (v2.9.8) Видалено запис в g_zvs_timestamps
+        g_zvs_qualification_counter++;
+        
+        g_zvs_qual_timeout_ms = ZVS_QUAL_TIMEOUT_MS; // Скидаємо таймер таймауту
     }
-
-    // Спростити логіку, що викликає update_clock() з ISR (якщо вона там була)
-    if(g_zvs_present /* && g_door_overlay_timer_ms == 0 ... */) { 
-        if(g_zvs_pulse_counter >= 50) { 
-            g_zvs_pulse_counter = 0; 
-            g_timer_ms = 0;          
-            update_clock(); // <--- Годинник оновлюється тут, якщо є ZVS
-        } 
+    
+    // (v2.9.2) Залишаємо ТІЛЬКИ логіку ввімкнення магнетрона
+    if(g_magnetron_request) {
+        MAGNETRON_PORT |= MAGNETRON_BIT;
     }
 }
 #endif

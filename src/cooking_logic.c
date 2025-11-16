@@ -38,40 +38,19 @@ void set_fan(bool on) { if (on) FAN_PORT |= FAN_BIT; else FAN_PORT &= ~FAN_BIT; 
 void setup_hardware() {
     DDRD &= ~ZVS_BIT; 
     CDD_DDR &= ~CDD_BIT; 
-    CDD_PORT |= CDD_BIT; 
+    // 🔽🔽🔽 ВИМКНЕННЯ ВНУТРІШНЬОГО PULL-UP (5В=Закрито, 0В/Фейл=Відкрито) (v2.9.0) 🔽🔽🔽
+    CDD_PORT &= ~CDD_BIT; 
     MAGNETRON_DDR |= MAGNETRON_BIT; MAGNETRON_PORT &= ~MAGNETRON_BIT;
     FAN_DDR |= FAN_BIT; FAN_PORT &= ~FAN_BIT;
     BEEPER_DDR |= BEEPER_BIT; BEEPER_PORT &= ~BEEPER_BIT;
 }
+// 🔽🔽🔽 ВИДАЛЕНО ЛОГІКУ ZVS_MODE 2 (v2.9.0) 🔽🔽🔽
+/*
 #if (ZVS_MODE == 2)
-void enter_sleep_mode() { 
-    // Потрібно викликати reset_to_idle() з основного модуля
-    // Ця реалізація спрощена
-    g_state = STATE_SLEEPING; 
-    set_colon_mode(COLON_OFF); 
-    
-    // --- ПІДГОТОВКА ДО ГЛИБОКОГО СНУ (POWER_DOWN) ---
-    // Вимкнення енерговитратних переривань
-    TIMSK &= ~(1<<OCIE1A);  // ВИМКНУТИ 1мс переривання Timer1 (ЕКОНОМІЯ ЕНЕРГІЇ)
-    GIMSK &= ~(1<<INT0);    // ВИМКНУТИ ZVS переривання
-    
-    // !!! ТУТ МАЄ БУТИ ВИКЛИК: 
-    setup_async_timer2_rtc();
-
-    // set_sleep_mode(SLEEP_MODE_IDLE); // ВИДАЛИТИ
-    set_sleep_mode(SLEEP_MODE_PWR_DOWN); // <--- ВИПРАВЛЕННЯ: Енергозбереження
-    sleep_enable();
-}
-void wake_up_from_sleep() { 
-    sleep_disable(); 
-    disable_async_timer2_rtc();
-    TIMSK |= (1<<OCIE1A);   // ВВІМКНУТИ 1мс переривання Timer1
-    GIMSK |= (1<<INT0);     // ВВІМКНУТИ ZVS переривання
-
-    g_state = STATE_IDLE; 
-    set_colon_mode(COLON_BLINK_SLOW);
-}
+void enter_sleep_mode() { ... }
+void wake_up_from_sleep() { ... }
 #endif
+*/
 
 void calculate_pwm_on_time() {
     if (g_cook_power_level == 0) { 
@@ -114,10 +93,10 @@ void recalculate_adaptive_pwm() {
 }
 
 bool start_cooking_cycle() {
-    if (CDD_PIN & CDD_BIT) {
+    // 🔽🔽🔽 ІНВЕРТОВАНА ПЕРЕВІРКА ДВЕРЕЙ (0В=Відкрито) (v2.9.0) 🔽🔽🔽
+    if (!(CDD_PIN & CDD_BIT)) {
         do_short_beep();
-        // reset_to_idle(); // Небезпечно викликати звідси,
-        // Головний цикл має перевірити 'false' і викликати reset_to_idle()
+        // reset_to_idle() викликається з головного loop()
         return false;
     }
 
@@ -133,7 +112,8 @@ bool start_cooking_cycle() {
 }
 
 void resume_cooking() {
-    if (!(CDD_PIN & CDD_BIT)) { 
+    // 🔽🔽🔽 ПЕРЕВІРКА ДВЕРЕЙ (5В=Закрито) (v2.9.0) 🔽🔽🔽
+    if ((CDD_PIN & CDD_BIT)) { 
         g_state=STATE_COOKING; 
         set_colon_mode(COLON_ON); 
         set_fan(true); 

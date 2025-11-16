@@ -1,16 +1,12 @@
 /*
- * ПОВНА ПРОШИВКА МІКРОХВИЛЬОВКИ (v_final_2.8.6_full_fix)
+ * ПОВНА ПРОШИВКА МІКРОХВИЛЬОВКИ (v_final_2.9.8 - Оптимізація ZVS v4)
  *
- * --- ОПИС ФУНКЦІОНАЛУ v2.8.6 ---
- * 1.  (v2.8.6) ВИПРАВЛЕНО: Порядок #include у microwave_firmware.h.
- * 2.  (v2.8.6) ВИПРАВЛЕНО: Повернено "важку" архітектуру ISR
- * (для стабільності АЦП на 8МГц).
- * 3.  (v2.8.6) ВИПРАВЛЕНО: Видалено 'g_1sec_tick_flag' та
- * виклик 'run_1sec_tasks()' з loop() (виправлення linker error).
- * 4.  (v2.8.6) ВИПРАВЛЕНО: Додано визначення та 'extern' для
- * 'g_clock_save_beep_phaser' (виправлення linker error).
- * 5.  (v2.8.6) ВИПРАВЛЕНО: Додано 'extern' для PROGMEM
- * таблиць у auto_programs.h (виправлення linker error).
+ * --- ОПИС ФУНКЦІОНАЛУ v2.9.8 ---
+ * 1. (v2.9.8) ОПТИМІЗАЦІЯ: Повністю видалено валідацію частоти ZVS (16-бітну математику).
+ * 2. (v2.9.8) ОПТИМІЗАЦІЯ: ZVS_MODE 1 тепер перевіряє лише НАЯВНІСТЬ 3-х імпульсів за 200мс.
+ * 3. (v2.9.2) ОПТИМІЗАЦІЯ: Вся логіка ZVS-кваліфікації загорнута в #if (ZVS_MODE != 0).
+ * 4. (v2.9.2) ВИДАЛЕНО: Повністю видалено STATE_SLEEPING та пов'язані перевірки.
+ * 5. (v2.9.0) ВИПРАВЛЕНО: Інвертована логіка дверей (5В=Закрито, 0В=Відкрито).
  */
 
 // ============================================================================
@@ -30,7 +26,9 @@ volatile AppState_t g_state = STATE_IDLE;
 volatile uint32_t g_millis_counter = 0; 
 volatile uint16_t g_timer_ms = 0; 
 
-// (v2.8.5) Видалено: g_1sec_tick_flag
+// (v2.9.2) 16-бітний "знімок" часу
+volatile uint16_t g_millis_16bit_snapshot = 0;
+
 volatile bool g_1sec_tick_flag = false;
 volatile bool g_start_cooking_flag = false; 
 
@@ -73,9 +71,15 @@ volatile bool g_magnetron_is_on = false;
 volatile uint8_t g_clock_hour = 0, g_clock_min = 0, g_clock_sec = 0;
 volatile bool g_clock_24hr_mode = true;
 volatile DefrostFlipInfo_t g_defrost_flip_info;
-volatile uint8_t g_zvs_qualification_counter = 0;
 
-// 🔽🔽🔽 (v2.8.6) ВИПРАВЛЕННЯ: Додано визначення phaser 🔽🔽🔽
+#if (ZVS_MODE != 0)
+// 🔽🔽🔽 (v2.9.8) Спрощено 🔽🔽🔽
+volatile uint8_t g_zvs_qualification_counter = 0;
+// volatile uint16_t g_zvs_timestamps[ZVS_QUALIFICATION_COUNT]; // Видалено
+volatile uint16_t g_zvs_qual_timeout_ms = 0;
+// volatile bool g_zvs_error_flag = false; // Видалено
+#endif
+
 volatile uint8_t g_clock_save_beep_phaser = 0; 
 
 
@@ -101,11 +105,14 @@ void reset_to_idle() {
     g_magnetron_last_off_timestamp_ms = 0; 
     g_was_two_stage_cook = false;
     g_post_cook_sec_counter = 0;
+    
+    #if (ZVS_MODE != 0)
     g_zvs_qualification_counter = 0;
-    g_zvs_pulse_counter = 0;
+    g_zvs_qual_timeout_ms = 0;
+    #endif
+    
     g_start_cooking_flag = false; 
 
-    // 🔽🔽🔽 (v2.8.6) ВИПРАВЛЕННЯ: Скидання phaser 🔽🔽🔽
     g_clock_save_beep_phaser = 0; 
 }
 
@@ -167,7 +174,7 @@ void handle_clock_input(char key) {
 }
 
 void handle_state_machine(char key, bool allow_beep) {
-    if (g_state == STATE_SLEEPING) return;
+    // (v2.9.2) Видалено: if (g_state == STATE_SLEEPING) return;
     
     // (v2.6.9) Дозволяємо +30 сек ТІЛЬКИ в ручному режимі
     if (key == KEY_START_QUICKSTART && 
@@ -240,8 +247,7 @@ void handle_state_machine(char key, bool allow_beep) {
             }
             break;
             
-        case STATE_SLEEPING: 
-            break;
+        // (v2.9.2) Видалено: case STATE_SLEEPING: 
             
         case STATE_SET_CLOCK_MODE:
             if (key == KEY_CLOCK) { 
@@ -505,6 +511,15 @@ void handle_state_machine(char key, bool allow_beep) {
         case STATE_STAGE2_TRANSITION:
             break;
             
+        #if (ZVS_MODE != 0)
+        case STATE_ZVS_QUALIFICATION: // (v2.9.0)
+            if (key == KEY_STOP_RESET) { 
+                reset_to_idle(); 
+                if (allow_beep) do_short_beep(); 
+            }
+            break;
+        #endif
+            
         default: 
             reset_to_idle();
     }
@@ -523,7 +538,8 @@ void setup() {
     setup_timer1_1ms();   // з timers_isr
     
     #if (ZVS_MODE!=0)
-        MCUCR|=(1<<ISC01); MCUCR&=~(1<<ISC00); GIMSK|=(1<<INT0); g_zvs_watchdog_counter=0; g_zvs_present=false;
+        MCUCR|=(1<<ISC01); MCUCR&=~(1<<ISC00); GIMSK|=(1<<INT0); 
+        // (v2.9.2) Видалено: g_zvs_watchdog_counter=0; g_zvs_present=false;
     #endif
     
     reset_to_idle(); 
@@ -538,26 +554,57 @@ void loop() {
     // Обробник прапора безпечного старту (v2.6.3)
     if (g_start_cooking_flag) {
         g_start_cooking_flag = false;
-        // Перевірка дверей тут, перш ніж викликати start_cooking_cycle
-        if (CDD_PIN & CDD_BIT) {
+        
+        // (v2.9.0) ІНВЕРТОВАНА ПЕРЕВІРКА ДВЕРЕЙ (0В=Відкрито)
+        if (!(CDD_PIN & CDD_BIT)) {
              reset_to_idle();
              do_short_beep();
         } else {
-             // (v2.8.0) Додаємо перевірку поверненого значення
-             if (!start_cooking_cycle()) {
-                reset_to_idle(); // Скидання, якщо старт не вдався
-             }
+            #if (ZVS_MODE != 0)
+            // (v2.9.0) ЛОГІКА ZVS КВАЛІФІКАЦІЇ
+            g_state = STATE_ZVS_QUALIFICATION;
+            g_zvs_qualification_counter = 0;
+            g_zvs_qual_timeout_ms = ZVS_QUAL_TIMEOUT_MS;
+            // g_zvs_error_flag = false; // (v2.9.2) Видалено
+            #else
+            // ZVS_MODE 0 (чистий релейний)
+            if (!start_cooking_cycle()) {
+                reset_to_idle(); 
+            }
+            #endif
         }
     }
+    
+    #if (ZVS_MODE != 0)
+    // --- Обробник стану ZVS_QUALIFICATION (v2.9.8 - Спрощено) ---
+    if (g_state == STATE_ZVS_QUALIFICATION) {
+        
+        // 🔽🔽🔽 (v2.9.3) ОБРОБКА ТАЙМАУТУ ПЕРЕНЕСЕНА З ISR 🔽🔽🔽
+        if (g_zvs_qual_timeout_ms == 0) {
+            // Таймаут стався (встановлено в ISR), а імпульси не зібрано
+            if (g_zvs_qualification_counter < ZVS_QUALIFICATION_COUNT) {
+                do_short_beep();
+                reset_to_idle();
+                goto loop_end_skip; // Пропускаємо решту loop()
+            }
+        }
+        
+        // (v2.9.8) Перевірка успіху (без 16-бітної математики)
+        if (g_zvs_qualification_counter >= ZVS_QUALIFICATION_COUNT) {
+            // Успіх! (Отримали 3 імпульси)
+            g_state = STATE_IDLE; 
+            if (!start_cooking_cycle()) {
+                reset_to_idle(); 
+            }
+        }
+    }
+    #endif
 
-    // 🔽🔽🔽 (v2.8.6) ВИПРАВЛЕННЯ: Видалено блок 'if (g_1sec_tick_flag)' 🔽🔽🔽
-    // (Логіка тепер виконується всередині ISR)
+    // (v2.8.6) Логіка g_1sec_tick_flag
     if (g_1sec_tick_flag) {
         g_1sec_tick_flag = false; 
         run_1sec_tasks();         
     }
-    // 🔼🔼🔼 Кінець виправлення (v2.8.6) 🔼🔼🔼
-
 
     // Обробник переходу між 2-ма етапами
     if (g_state == STATE_STAGE2_TRANSITION) {
@@ -573,93 +620,90 @@ void loop() {
         }
     }
     
-    #if (ZVS_MODE==2)
-        if(g_state==STATE_SLEEPING) { 
-            // (v2.8.0) enter_sleep_mode() тепер викликається з 1-сек логіки
-            sleep_cpu(); 
-            s_lps=0; 
-            s_last_door_state = (CDD_PIN & CDD_BIT); 
-        }
-    #endif
-        
-    if(g_state!=STATE_SLEEPING) {
+    // (v2.9.2) ВИДАЛЕНО обгортку if(g_state!=STATE_SLEEPING)
     
-        // --- Логіка блокування (утримання STOP) ---
-        if(g_key_hold_3sec_flag) {
-            g_key_hold_3sec_flag=false;
-            char hk=g_last_key_for_hold;
-            if(hk==KEY_STOP_RESET) { 
-                if(g_state==STATE_IDLE) { 
-                    g_state = STATE_LOCKED; 
-                    do_short_beep();
-                } 
-                else if(g_state==STATE_LOCKED) {
-                    reset_to_idle(); 
-                    do_short_beep();
-                }
+    // --- Логіка блокування (утримання STOP) ---
+    if(g_key_hold_3sec_flag) {
+        g_key_hold_3sec_flag=false;
+        char hk=g_last_key_for_hold;
+        if(hk==KEY_STOP_RESET) { 
+            if(g_state==STATE_IDLE) { 
+                g_state = STATE_LOCKED; 
+                do_short_beep();
+            } 
+            else if(g_state==STATE_LOCKED) {
+                reset_to_idle(); 
+                do_short_beep();
             }
-            s_lps=0;
         }
-
-        // --- Логіка дверей ---
-        bool door_is_open = (CDD_PIN & CDD_BIT);
-        if (door_is_open != s_last_door_state) {
-            if (door_is_open) {
-                if (g_state == STATE_COOKING) { g_state = STATE_PAUSED; g_door_open_during_pause = true; set_magnetron(false); set_fan(false); } 
-                else if (g_state == STATE_PAUSED || g_state == STATE_FLIP_PAUSE) { g_door_open_during_pause = true; g_flip_beep_timeout_ms = 0; } 
-                else if (g_state == STATE_FINISHED || g_state == STATE_POST_COOK) { reset_to_idle(); } 
-                else if (g_state != STATE_LOCKED && g_state != STATE_STAGE2_TRANSITION) { g_door_overlay_timer_ms = 2000; }
-            } else { 
-                if (g_door_open_during_pause) g_door_open_during_pause = false;
-                if (g_door_overlay_timer_ms > 0) g_door_overlay_timer_ms = 0;
-            }
-            s_last_door_state = door_is_open;
-        }
-
-        // --- Логіка обробки кнопок ---
-        bool allow_keys=true;
-        if(g_state==STATE_LOCKED || g_state==STATE_CLOCK_SAVED || g_door_overlay_timer_ms > 0 || g_state == STATE_STAGE2_TRANSITION) 
-            allow_keys=false;
-        if(g_door_open_during_pause) allow_keys=true;
-        
-        if(allow_keys) {
-            cks=get_key_press(); // з keypad_driver
-            if(g_door_open_during_pause && cks!=KEY_STOP_RESET && cks!=0) cks=0;
-            
-            // Обробка утримання
-            if(cks!=0) { 
-                if(g_key_continuous_hold_ms > 500) 
-                    handle_key_hold_increment(cks, g_key_continuous_hold_ms, &s_lht); // з keypad_driver
-            } else {
-                s_lht=0;
-            }
-            
-            if(cks!=s_lps) { 
-                if(cks==0) { 
-                    
-                    char released_key = s_lps; 
-
-                    if(released_key != 0 && g_last_key_hold_duration <= 500) {
-                        handle_state_machine(released_key, true);
-                    }
-                }
-                s_lps=cks; 
-            }
-
-        } else { s_lps=0; s_lht=0; }
-        
-        // 🔽🔽🔽 (v2.8.6) ВИПРАВЛЕННЯ: Повернено коректну логіку v2.6.2 🔽🔽🔽
-        // Це викликає 'handle_state_machine' з 'key=0',
-        // що дозволяє обробити натискання STOP у станах FINISHED/POST_COOK.
-        if(g_state==STATE_FINISHED || g_state==STATE_POST_COOK) {
-            handle_state_machine(0, false);
-        }
-        // 🔼🔼🔼 Кінець виправлення (v2.8.6) 🔼🔼🔼
-        
-        if (g_state != STATE_SLEEPING) {
-            update_display(); 
-        }
+        s_lps=0;
     }
+
+    // --- Логіка дверей ---
+    // (v2.9.0) 5В=Закрито, 0В=Відкрито
+    bool door_is_open = !(CDD_PIN & CDD_BIT);
+    if (door_is_open != s_last_door_state) {
+        if (door_is_open) {
+            if (g_state == STATE_COOKING) { g_state = STATE_PAUSED; g_door_open_during_pause = true; set_magnetron(false); set_fan(false); } 
+            else if (g_state == STATE_PAUSED || g_state == STATE_FLIP_PAUSE) { g_door_open_during_pause = true; g_flip_beep_timeout_ms = 0; } 
+            else if (g_state == STATE_FINISHED || g_state == STATE_POST_COOK) { reset_to_idle(); } 
+            #if (ZVS_MODE != 0)
+            else if (g_state != STATE_LOCKED && g_state != STATE_STAGE2_TRANSITION && g_state != STATE_ZVS_QUALIFICATION) { g_door_overlay_timer_ms = 2000; }
+            #else
+            else if (g_state != STATE_LOCKED && g_state != STATE_STAGE2_TRANSITION) { g_door_overlay_timer_ms = 2000; }
+            #endif
+        } else { 
+            if (g_door_open_during_pause) g_door_open_during_pause = false;
+            if (g_door_overlay_timer_ms > 0) g_door_overlay_timer_ms = 0;
+        }
+        s_last_door_state = door_is_open;
+    }
+
+    // --- Логіка обробки кнопок ---
+    bool allow_keys=true;
+    #if (ZVS_MODE != 0)
+    if(g_state==STATE_LOCKED || g_state==STATE_CLOCK_SAVED || g_door_overlay_timer_ms > 0 || g_state == STATE_STAGE2_TRANSITION || g_state == STATE_ZVS_QUALIFICATION) 
+        allow_keys=false;
+    #else
+    if(g_state==STATE_LOCKED || g_state==STATE_CLOCK_SAVED || g_door_overlay_timer_ms > 0 || g_state == STATE_STAGE2_TRANSITION) 
+        allow_keys=false;
+    #endif
+    
+    if(g_door_open_during_pause) allow_keys=true;
+    
+    if(allow_keys) {
+        cks=get_key_press(); // з keypad_driver
+        if(g_door_open_during_pause && cks!=KEY_STOP_RESET && cks!=0) cks=0;
+        
+        // Обробка утримання
+        if(cks!=0) { 
+            if(g_key_continuous_hold_ms > 500) 
+                handle_key_hold_increment(cks, g_key_continuous_hold_ms, &s_lht); // з keypad_driver
+        } else {
+            s_lht=0;
+        }
+        
+        if(cks!=s_lps) { 
+            if(cks==0) { 
+                char released_key = s_lps; 
+                if(released_key != 0 && g_last_key_hold_duration <= 500) {
+                    handle_state_machine(released_key, true);
+                }
+            }
+            s_lps=cks; 
+        }
+
+    } else { s_lps=0; s_lht=0; }
+    
+    // (v2.8.6)
+    if(g_state==STATE_FINISHED || g_state==STATE_POST_COOK) {
+        handle_state_machine(0, false);
+    }
+    
+    // (v2.9.2) Видалено перевірку STATE_SLEEPING
+    update_display(); 
+    
+    loop_end_skip:; // (v2.9.3) Мітка для goto
 }
 
 int main(void) { 

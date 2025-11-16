@@ -1,15 +1,12 @@
 /*
- * ПОВНА ПРОШИВКА МІКРОХВИЛЬОВКИ (v_final_2.8.6_full_fix)
+ * ПОВНА ПРОШИВКА МІКРОХВИЛЬОВКИ (v_final_2.9.8 - Оптимізація ZVS v4)
  *
- * --- ОПИС ФУНКЦІОНАЛУ v2.8.6 ---
- * 1.  (v2.8.6) ВИПРАВЛЕНО: Повністю змінено порядок #include.
- * Всі 'typedef' тепер знаходяться ДО підключення
- * дочірніх .h файлів, що виправляє всі помилки
- * 'unknown type name ...' (циклічна залежність).
- * 2.  (v2.8.6) ВИПРАВЛЕНО: Повернено "важку" архітектуру ISR
- * (для стабільності АЦП на 8МГц).
- * 3.  (v2.8.6) ВИПРАВЛЕНО: Видалено 'g_1sec_tick_flag' та
- * виклик 'run_1sec_tasks()' з loop() (виправлення linker error).
+ * --- ОПИС ФУНКЦІОНАЛУ v2.9.8 ---
+ * 1. (v2.9.8) ОПТИМІЗАЦІЯ: Повністю видалено валідацію частоти ZVS (16-бітну математику).
+ * 2. (v2.9.8) ОПТИМІЗАЦІЯ: ZVS_MODE 1 тепер перевіряє лише НАЯВНІСТЬ 3-х імпульсів за 200мс.
+ * 3. (v2.9.2) ОПТИМІЗАЦІЯ: Вся логіка ZVS-кваліфікації загорнута в #if (ZVS_MODE != 0).
+ * 4. (v2.9.2) ВИДАЛЕНО: Повністю видалено STATE_SLEEPING та пов'язані перевірки.
+ * 5. (v2.9.0) ВИПРАВЛЕНО: Інвертована логіка дверей (5В=Закрито, 0В=Відкрито).
  */
 
 #ifndef MICROWAVE_FIRMWARE_H_
@@ -30,29 +27,36 @@
 
 #define ENABLE_KEYPAD 1 
 
-// (v2.8.6) Додано DEFINE сюди, щоб timers_isr.c міг їх бачити
-#define ZVS_MIN_PULSES_PER_SEC 40 
-#define ZVS_QUALIFICATION_SECONDS 3
+// (v2.9.2) Видалено невикористовувані константи ZVS
+// #define ZVS_MIN_PULSES_PER_SEC 40 
+
+#if (ZVS_MODE != 0)
+// 🔽🔽🔽 КОНСТАНТИ ДЛЯ КВАЛІФІКАЦІЇ ZVS (v2.9.8 - Спрощено) 🔽🔽🔽
+#define ZVS_QUALIFICATION_COUNT 3
+#define ZVS_QUAL_TIMEOUT_MS 200 
+// (v2.9.8) Видалено MIN/MAX_INTERVAL_MS
+#endif
 
 
 // ============================================================================
 // --- 🟡 ТИПИ ДАНИХ (ENUMS & STRUCTS) ---
 // ============================================================================
-// (v2.8.6) Цей блок ПЕРЕМІЩЕНО ВГОРУ, до #include, 
-// щоб виправити помилки 'unknown type name'
 
 typedef enum {
     COLON_OFF = 0, COLON_ON = 1, COLON_BLINK_SLOW = 2, COLON_BLINK_FAST = 3, COLON_BLINK_SUPERFAST=4
 } ColonDisplayMode;
 
 typedef enum {
-    STATE_IDLE, STATE_SLEEPING, STATE_SET_CLOCK_MODE, STATE_SET_CLOCK_TIME,
+    STATE_IDLE, /* STATE_SLEEPING, */ STATE_SET_CLOCK_MODE, STATE_SET_CLOCK_TIME, // (v2.9.2) Видалено STATE_SLEEPING
     STATE_CLOCK_SAVED, STATE_SET_TIME, STATE_SET_POWER, STATE_TWO_STAGE_1,
     STATE_TWO_STAGE_2, STATE_SET_AUTO_COOK, STATE_SET_AUTO_DEFROST,
     STATE_SET_WEIGHT, STATE_QUICK_START_PREP, STATE_COOKING, STATE_PAUSED,
     STATE_FLIP_PAUSE, STATE_FINISHED, STATE_POST_COOK, 
     STATE_LOCKED,
-    STATE_STAGE2_TRANSITION // (v2.3.3)
+    STATE_STAGE2_TRANSITION,
+    #if (ZVS_MODE != 0)
+    STATE_ZVS_QUALIFICATION // (v2.9.0) Стан очікування ZVS
+    #endif
 } AppState_t;
 
 typedef enum { PROGRAM_NONE, PROGRAM_COOK, PROGRAM_DEFROST } AutoProgramType;
@@ -70,8 +74,6 @@ typedef struct {
 // ============================================================================
 // --- 🔴 ВКЛЮЧЕННЯ МОДУЛІВ (v2.8.0) ---
 // ============================================================================
-// (v2.8.6) Цей блок ПЕРЕМІЩЕНО ВНИЗ, після typedef
-
 #include "display_driver.h"
 #include "keypad_driver.h"
 #include "timers_isr.h"
@@ -111,6 +113,9 @@ extern volatile AppState_t g_state;
 extern volatile uint32_t g_millis_counter; 
 extern volatile uint16_t g_timer_ms; 
 
+// (v2.9.2) 16-бітний "знімок" часу
+extern volatile uint16_t g_millis_16bit_snapshot;
+
 extern volatile bool g_1sec_tick_flag;
 extern volatile bool g_start_cooking_flag; 
 
@@ -139,7 +144,14 @@ extern volatile uint32_t g_magnetron_last_off_timestamp_ms;
 extern volatile uint8_t g_pwm_cycle_duration;
 extern volatile uint8_t g_pwm_cycle_counter_seconds;
 
+#if (ZVS_MODE != 0)
+// 🔽🔽🔽 (v2.9.8) Спрощено 🔽🔽🔽
 extern volatile uint8_t g_zvs_qualification_counter; 
+// extern volatile uint16_t g_zvs_timestamps[ZVS_QUALIFICATION_COUNT]; // Видалено
+extern volatile uint16_t g_zvs_qual_timeout_ms;
+// extern volatile bool g_zvs_error_flag; // Видалено
+#endif
+
 
 extern volatile uint16_t g_cook_time_total_sec, g_cook_original_total_time;
 extern volatile uint8_t g_cook_power_level;
@@ -158,9 +170,7 @@ extern volatile uint8_t g_clock_hour, g_clock_min, g_clock_sec;
 extern volatile bool g_clock_24hr_mode;
 extern volatile DefrostFlipInfo_t g_defrost_flip_info;
 
-// 🔽🔽🔽 (v2.8.6) ВИПРАВЛЕННЯ: Додано 'extern' для phaser 🔽🔽🔽
 extern volatile uint8_t g_clock_save_beep_phaser; 
-
 
 extern const uint16_t power_levels_watt[];
 #define ADAPTIVE_PWM_THRESHOLD_SEC 30

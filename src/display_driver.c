@@ -155,6 +155,7 @@ void run_display_multiplex() {
 
 void update_display() {
     if (g_door_overlay_timer_ms > 0) { 
+        // 🔽🔽🔽 (v2.9.2) ВИДАЛЕНО ЛОГІКУ "ERR-". Завжди показуємо "DOOR" 🔽🔽🔽
         set_display(CHAR_D, CHAR_O, CHAR_O, CHAR_R); 
         set_colon_mode(COLON_OFF); 
         return; 
@@ -206,9 +207,7 @@ void update_display() {
             }
         } break;
         
-        case STATE_SLEEPING: 
-            disable_all_digits(); 
-            break;
+        // (v2.9.2) Видалено: case STATE_SLEEPING:
             
         case STATE_SET_CLOCK_MODE: 
             set_colon_mode(COLON_OFF); 
@@ -301,13 +300,17 @@ void update_display() {
                 set_display(CHAR_E, CHAR_N, CHAR_D, CHAR_DASH); // "End-"
             break;
 
-        // --- 🔴 ПОЧАТОК БЛОКУ ВИПРАВЛЕННЯ (v2.3.3 - Баг 2-го етапу) ---
-        // Під час переходу показуємо прочерки, як у стані за замовчуванням
         case STATE_STAGE2_TRANSITION:
             set_colon_mode(COLON_OFF); 
             set_display(CHAR_DASH, CHAR_DASH, CHAR_DASH, CHAR_DASH); 
             break;
-        // --- 🔴 КІНЕЦЬ БЛОКУ ВИПРАВЛЕННЯ ---
+        
+        #if (ZVS_MODE != 0)
+        case STATE_ZVS_QUALIFICATION: // (v2.9.0)
+            set_colon_mode(COLON_ON); 
+            display_time_suppressed(0); // Показуємо 0:00 під час очікування сигналу
+            break;
+        #endif
             
         default: 
             set_colon_mode(COLON_OFF); 

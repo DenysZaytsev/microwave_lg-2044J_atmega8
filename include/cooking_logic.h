@@ -55,9 +55,12 @@ void resume_cooking(void);
  */
 void update_cook_timer(void);
 
+// 🔽🔽🔽 ВИДАЛЕНО ПРОТОТИПИ enter_sleep_mode та wake_up_from_sleep (ZVS MODE 2) 🔽🔽🔽
+/*
 #if (ZVS_MODE == 2)
 void enter_sleep_mode();
 void wake_up_from_sleep();
 #endif
+*/
 
 #endif // COOKING_LOGIC_H_
